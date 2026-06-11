@@ -13,29 +13,6 @@ pipeline {
             }
         }
 
-        stage('Setup Tools') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    sh '''
-                        TOOLS_DIR="$HOME/devpilot-tools"
-                        mkdir -p "$TOOLS_DIR/bin"
-
-                        if ! which docker 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/docker" ]; then
-                            DOCKER_VERSION=24.0.7
-                            curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker-cli.tgz 2>/dev/null || true
-                            tar -xz -C /tmp -f /tmp/docker-cli.tgz 2>/dev/null || true
-                            mv /tmp/docker/docker "$TOOLS_DIR/bin/docker" 2>/dev/null || true
-                            rm -rf /tmp/docker-cli.tgz /tmp/docker 2>/dev/null || true
-                        fi
-
-                        if ! which trivy 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/trivy" ]; then
-                            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$TOOLS_DIR/bin" 2>/dev/null || true
-                        fi
-                    '''
-                }
-            }
-        }
-
         stage('SonarQube Analysis') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
