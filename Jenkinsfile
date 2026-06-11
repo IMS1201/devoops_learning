@@ -13,23 +13,6 @@ pipeline {
             }
         }
 
-        stage('SonarQube Analysis') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    script {
-                        def sonarOk = sh(script: 'which sonar-scanner 2>/dev/null', returnStatus: true) == 0
-                        if (sonarOk) {
-                            withSonarQubeEnv('SonarQube') {
-                                sh 'npx --yes sonar-scanner -Dsonar.projectKey=${env.JOB_NAME} -Dsonar.sources=. -Dsonar.host.url=${SONAR_HOST_URL}'
-                            }
-                        } else {
-                            echo 'sonar-scanner not found — configure SonarQube Scanner in Jenkins → Manage Jenkins → Tools'
-                        }
-                    }
-                }
-            }
-        }
-
         stage('Docker Build') {
             when { expression { return fileExists('frontend/Dockerfile') } }
             steps {
@@ -57,14 +40,12 @@ pipeline {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
                     script {
-                        withEnv(["PATH+DEVPILOT=${env.HOME}/devpilot-tools/bin"]) {
-                            def trivyOk = sh(script: 'which trivy 2>/dev/null', returnStatus: true) == 0
-                            if (trivyOk) {
-                                sh "trivy image --exit-code 0 --severity HIGH,CRITICAL --format table ${DOCKER_IMAGE}:${DOCKER_TAG} | tee trivy-report.txt"
-                                archiveArtifacts artifacts: 'trivy-report.txt', allowEmptyArchive: true
-                            } else {
-                                echo 'Trivy not available — skipping scan'
-                            }
+                        def trivyOk = sh(script: 'which trivy 2>/dev/null', returnStatus: true) == 0
+                        if (trivyOk) {
+                            sh "trivy image --exit-code 0 --severity HIGH,CRITICAL --format table ${DOCKER_IMAGE}:${DOCKER_TAG} | tee trivy-report.txt"
+                            archiveArtifacts artifacts: 'trivy-report.txt', allowEmptyArchive: true
+                        } else {
+                            echo 'Trivy not available — skipping scan'
                         }
                     }
                 }
@@ -98,15 +79,14 @@ pipeline {
                             sh '''
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "echo 'Deploying application...'"
-                                PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $2}' | head -1 || echo ''")
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@18.207.123.242 "docker-compose pull froned && docker-compose up -d --no-deps froned" || {
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
+                                PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $NF}' | head -1 || echo ''")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@54.90.192.190 "docker pull pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG && docker-compose -f ~/devpilot-app/docker-compose.yml up -d --no-deps frontend" || {
                                     echo "Deploy failed — rolling back to $PREV_TAG"
-                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && docker-compose up -d --no-deps froned" || true
+                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && docker-compose up -d --no-deps frontend" || true
                                     exit 1
                                 }
-                                echo "Deployed froned to http://18.207.123.242"
+                                echo "Deployed frontend to http://54.90.192.190"
                             '''
                         }
                     }
@@ -120,12 +100,12 @@ pipeline {
             script {
                 def status = currentBuild.result ?: 'IN_PROGRESS'
                 def promptText = "Analyze this Jenkins CI/CD build and give 2-3 actionable bullet points: what passed, what failed (if any), and one improvement.\nJob: ${env.JOB_NAME} Build#${env.BUILD_NUMBER} Branch: ${env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'unknown'} Status: ${status}"
-                def aiDone = false;
+                def aiDone = false
 
                 for (def credId : ['devpilot-anthropic-key', 'ANTHROPIC_API_KEY']) {
                     if (aiDone) break
                     try {
-                        withCredentials([string(credentialsId: credId, variable: 'ANTHropic_KEY')]) {
+                        withCredentials([string(credentialsId: credId, variable: 'ANTHROPIC_KEY')]) {
                             writeFile file: '.ai-payload.json', text: groovy.json.JsonOutput.toJson([
                                 model: 'claude-haiku-4-5-20251001',
                                 max_tokens: 350,
@@ -134,7 +114,7 @@ pipeline {
                             def rc = sh returnStatus: true, script: '''
                                 curl -sf -X POST https://api.anthropic.com/v1/messages \
                                   -H 'Content-Type: application/json' \
-                                  -H "x-api-key: $ANTHropic_KEY" \
+                                  -H "x-api-key: $ANTHROPIC_KEY" \
                                   -H 'anthropic-version: 2023-06-01' \
                                   --max-time 30 \
                                   -d @.ai-payload.json \
