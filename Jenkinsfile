@@ -13,29 +13,6 @@ pipeline {
             }
         }
 
-        stage('Setup Tools') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    sh '''
-                        TOOLS_DIR="$HOME/devpilot-tools"
-                        mkdir -p "$TOOLS_DIR/bin"
-
-                        if ! which docker 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/docker" ]; then
-                            DOCKER_VERSION=24.0.7
-                            curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker-cli.tgz 2>/dev/null || true
-                            tar -xz -C /tmp -f /tmp/docker-cli.tgz 2>/dev/null || true
-                            mv /tmp/docker/docker "$TOOLS_DIR/bin/docker" 2>/dev/null || true
-                            rm -rf /tmp/docker-cli.tgz /tmp/docker 2>/dev/null || true
-                        fi
-
-                        if ! which trivy 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/trivy" ]; then
-                            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$TOOLS_DIR/bin" 2>/dev/null || true
-                        fi
-                    '''
-                }
-            }
-        }
-
         stage('SonarQube Analysis') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
@@ -122,13 +99,11 @@ pipeline {
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "pip3 install pyyaml -q 2>/dev/null || true; echo \"aW1wb3J0IHlhbWwsIHN5cywgb3MsIGZjbnRsCnBhdGggPSBvcy5wYXRoLmV4cGFuZHVzZXIoJ34vZGV2cGlsb3QtYXBwL2RvY2tlci1jb21wb3NlLnltbCcpCnRhZyA9IHN5cy5hcmd2WzFdCm9zLm1ha2VkaXJzKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAnKSwgZXhpc3Rfb2s9VHJ1ZSkKbGYgPSBvcGVuKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAvLmRldnBpbG90LmxvY2snKSwgJ3cnKQpmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19FWCkKdHJ5OgogdHJ5OgogIHdpdGggb3BlbihwYXRoKSBhcyBmOiBkYXRhID0geWFtbC5zYWZlX2xvYWQoZikgb3Ige30KIGV4Y2VwdCBFeGNlcHRpb246CiAgZGF0YSA9IHt9CiBpZiBub3QgaXNpbnN0YW5jZShkYXRhLmdldCgnc2VydmljZXMnKSwgZGljdCk6IGRhdGFbJ3NlcnZpY2VzJ10gPSB7fQogc3ZjID0gZGljdChkYXRhWydzZXJ2aWNlcyddLmdldCgnZnJvbmVkJykgb3Ige30pCiBzdmNbJ2ltYWdlJ10gPSAncGF2MzAvYmFzaWMtZnVsbC1zdGFjay1hcHA6JyArIHRhZwogc3ZjWydyZXN0YXJ0J10gPSAndW5sZXNzLXN0b3BwZWQnCiBpZiAncG9ydHMnIG5vdCBpbiBzdmM6IHN2Y1sncG9ydHMnXSA9IFsnODA6MzAwMCddCiBkYXRhWydzZXJ2aWNlcyddWydmcm9uZWQnXSA9IHN2Ywogd2l0aCBvcGVuKHBhdGgsICd3JykgYXMgZjogeWFtbC5kdW1wKGRhdGEsIGYsIGRlZmF1bHRfZmxvd19zdHlsZT1GYWxzZSkKIHByaW50KCdmcm9uZWQgLT4gcGF2MzAvYmFzaWMtZnVsbC1zdGFjay1hcHA6JyArIHRhZykKZmluYWxseToKIGZjbnRsLmZsb2NrKGxmLCBmY250bC5MT0NLX1VOKQogbGYuY2xvc2UoKQ==\" | base64 -d > /tmp/devpilot_froned.py"
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "echo 'Deploying application...'"
                                 PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $2}' | head -1 || echo ''")
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@18.207.123.242 "python3 /tmp/devpilot_froned.py ${BUILD_NUMBER}"
-                                COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=60 ubuntu@18.207.123.242 "cd ~/devpilot-app && $COMPOSE_CMD pull froned && $COMPOSE_CMD up -d --no-deps froned" || {
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@18.207.123.242 "docker-compose pull froned && docker-compose up -d --no-deps froned" || {
                                     echo "Deploy failed — rolling back to $PREV_TAG"
-                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && $COMPOSE_CMD up -d --no-deps froned" || true
+                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@18.207.123.242 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && docker-compose up -d --no-deps froned" || true
                                     exit 1
                                 }
                                 echo "Deployed froned to http://18.207.123.242"
