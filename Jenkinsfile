@@ -13,6 +13,46 @@ pipeline {
             }
         }
 
+        stage('Setup Tools') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    sh '''
+                        TOOLS_DIR="$HOME/devpilot-tools"
+                        mkdir -p "$TOOLS_DIR/bin"
+
+                        if ! which docker 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/docker" ]; then
+                            DOCKER_VERSION=24.0.7
+                            curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker-cli.tgz 2>/dev/null || true
+                            tar -xz -C /tmp -f /tmp/docker-cli.tgz 2>/dev/null || true
+                            mv /tmp/docker/docker "$TOOLS_DIR/bin/docker" 2>/dev/null || true
+                            rm -rf /tmp/docker-cli.tgz /tmp/docker 2>/dev/null || true
+                        fi
+
+                        if ! which trivy 2>/dev/null && [ ! -x "$TOOLS_DIR/bin/trivy" ]; then
+                            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$TOOLS_DIR/bin" 2>/dev/null || true
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    script {
+                        def sonarOk = sh(script: 'which sonar-scanner 2>/dev/null', returnStatus: true) == 0
+                        if (sonarOk) {
+                            withSonarQubeEnv('SonarQube') {
+                                sh 'npx --yes sonar-scanner -Dsonar.projectKey=${env.JOB_NAME} -Dsonar.sources=. -Dsonar.host.url=${SONAR_HOST_URL}'
+                            }
+                        } else {
+                            echo 'sonar-scanner not found — configure SonarQube Scanner in Jenkins → Manage Jenkins → Tools'
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Docker Build') {
             when { expression { return fileExists('frontend/Dockerfile') } }
             steps {
@@ -55,7 +95,7 @@ pipeline {
         }
 
         stage('Push to Registry') {
-            when { expression { return fileExists('Dockerfile') } }
+            when { expression { return fileExists('frontend/Dockerfile') } }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
                     script {
@@ -73,7 +113,7 @@ pipeline {
         }
 
         stage('Deploy to VM') {
-            when { expression { return fileExists('Dockerfile') } }
+            when { expression { return fileExists('frontend/Dockerfile') } }
             steps {
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     script {
@@ -82,10 +122,13 @@ pipeline {
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "pip3 install pyyaml -q 2>/dev/null || true; echo \"aW1wb3J0IHlhbWwsIHN5cywgb3MsIGZjbnRsCnBhdGggPSBvcy5wYXRoLmV4cGFuZHVzZXIoJ34vZGV2cGlsb3QtYXBwL2RvY2tlci1jb21wb3NlLnltbCcpCnRhZyA9IHN5cy5hcmd2WzFdCm9zLm1ha2VkaXJzKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAnKSwgZXhpc3Rfb2s9VHJ1ZSkKbGYgPSBvcGVuKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAvLmRldnBpbG90LmxvY2snKSwgJ3cnKQpmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19FWCkKdHJ5OgogdHJ5OgogIHdpdGggb3BlbihwYXRoKSBhcyBmOiBkYXRhID0geWFtbC5zYWZlX2xvYWQoZikgb3Ige30KIGV4Y2VwdCBGaWxlTm90Rm91bmRFcnJvcjoKICBkYXRhID0ge30KIGlmIG5vdCBpc2luc3RhbmNlKGRhdGEuZ2V0KCdzZXJ2aWNlcycpLCBkaWN0KTogZGF0YVsnc2VydmljZXMnXSA9IHt9CiBzdmMgPSBkaWN0KGRhdGFbJ3NlcnZpY2VzJ10uZ2V0KCdmcm9udGVuZCcpIG9yIHt9KQogc3ZjWydpbWFnZSddID0gJ3BhdjMwL2Jhc2ljLWZ1bGwtc3RhY2stYXBwOicgKyB0YWcKIHN2Y1sncmVzdGFydCddID0gJ3VubGVzcy1zdG9wcGVkJwogaWYgJ3BvcnRzJyBub3QgaW4gc3ZjOiBzdmNbJ3BvcnRzJ10gPSBbJzgwOjMwMDAnXQogZGF0YVsnc2VydmljZXMnXVsnZnJvbnRlbmQnXSA9IHN2Ywogd2l0aCBvcGVuKHBhdGgsICd3JykgYXMgZjogeWFtbC5kdW1wKGRhdGEsIGYsIGRlZmF1bHRfZmxvd19zdHlsZT1GYWxzZSkKIHByaW50KCdmcm9udGVuZCAtPiBwYXYzMC9iYXNpYy1mdWxsLXN0YWNrLWFwcDonICsgdGFnKQpmaW5hbGx5OgogZmNudGwuZmxvY2sobGYsIGZjbnRsLkxPQ0tfVU4pCiBsZi5jbG9zZSgp\" | base64 -d > /tmp/devpilot_frontend.py"
                                 PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $2}' | head -1 || echo ''")
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@3.94.193.111 "docker pull pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG && docker-compose -f ~/devpilot-app/docker-compose.yml up -d --no-deps frontend" || {
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@3.94.193.111 "python3 /tmp/devpilot_frontend.py ${BUILD_NUMBER}"
+                                COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=60 ubuntu@3.94.193.111 "cd ~/devpilot-app && $COMPOSE_CMD pull frontend && $COMPOSE_CMD up -d --no-deps frontend" || {
                                     echo "Deploy failed — rolling back to $PREV_TAG"
-                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && docker-compose up -d --no-deps frontend" || true
+                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "sed -i 's|image: pav30/basic-full-stack-app:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && $COMPOSE_CMD up -d --no-deps frontend" || true
                                     exit 1
                                 }
                                 echo "Deployed frontend to http://3.94.193.111"
