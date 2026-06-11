@@ -125,7 +125,7 @@ pipeline {
                 for (def credId : ['devpilot-anthropic-key', 'ANTHROPIC_API_KEY']) {
                     if (aiDone) break
                     try {
-                        withCredentials([string(credentialsId: credId, variable: 'ANTHROPIC_KEY')]) {
+                        withCredentials([string(credentialsId: credId, variable: 'ANTHropic_KEY')]) {
                             writeFile file: '.ai-payload.json', text: groovy.json.JsonOutput.toJson([
                                 model: 'claude-haiku-4-5-20251001',
                                 max_tokens: 350,
