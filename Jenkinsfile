@@ -121,7 +121,7 @@ pipeline {
             script {
                 def status = currentBuild.result ?: 'IN_PROGRESS'
                 def promptText = "Analyze this Jenkins CI/CD build and give 2-3 actionable bullet points: what passed, what failed (if any), and one improvement.\nJob: ${env.JOB_NAME} Build#${env.BUILD_NUMBER} Branch: ${env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'unknown'} Status: ${status}"
-                def aiDone = false
+                def aiDone = false;
 
                 for (def credId : ['devpilot-anthropic-key', 'ANTHROPIC_API_KEY']) {
                     if (aiDone) break
