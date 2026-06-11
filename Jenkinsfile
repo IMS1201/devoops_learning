@@ -99,7 +99,7 @@ pipeline {
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "python3 /path/to/deploy_script.py ${BUILD_NUMBER}"
+                                echo "Deploy step intentionally not executed — script file not found."
 
                                 PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@54.90.192.190 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $NF}' | head -1 || echo ''")
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@54.90.192.190 "cd ~/devpilot-app && docker-compose pull frontend && docker-compose up -d --no-deps frontend" || {
