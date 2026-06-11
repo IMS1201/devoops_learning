@@ -100,7 +100,7 @@ pipeline {
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
                                 PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $2}' | head -1 || echo ''")
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@3.94.193.111 "python3 /tmp/devpilot_frontend.py ${BUILD_NUMBER}"
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "python3 /tmp/devpilot_frontend.py ${BUILD_NUMBER}"
                                 COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=60 ubuntu@3.94.193.111 "cd ~/devpilot-app && $COMPOSE_CMD pull frontend && $COMPOSE_CMD up -d --no-deps frontend" || {
                                     echo "Deploy failed — rolling back to $PREV_TAG"
