@@ -99,7 +99,6 @@ pipeline {
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
-                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "pip3 install pyyaml -q 2>/dev/null || true; echo \"aW1wb3J0IHlhbWwsIHN5cywgb3MsIGZjbnRsCnBhdGggPSBvcy5wYXRoLmV4cGFuZHVzZXIoJ34vZGV2cGlsb3QtYXBwL2RvY2tlci1jb21wb3NlLnltbCcpCnRhZyA9IHN5cy5hcmd2WzFdCm9zLm1ha2VkaXJzKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAnKSwgZXhpc3Rfb2s9VHJ1ZSkKbGYgPSBvcGVuKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAvLmRldnBpbG90LmxvY2snKSwgJ3cnKQpmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19FWCkKdHJ5OgogdHJ5OgogIHdpdGggb3BlbihwYXRoKSBhcyBmOiBkYXRhID0geWFtbC5zYWZlX2xvYWQoZikgb3Ige30KIGV4Y2VwdCBGaWxlTm90Rm91bmRFcnJvcjoKICBkYXRhID0ge30KIGlmIG5vdCBpc2luc3RhbmNlKGRhdGEuZ2V0KCdzZXJ2aWNlcycpLCBkaWN0KTogZGF0YVsnc2VydmljZXMnXSA9IHt9CiBzdmMgPSBkaWN0KGRhdGFbJ3NlcnZpY2VzJ10uZ2V0KCdmcm9udGVuZCcpIG9yIHt9KQogc3ZjWydpbWFnZSddID0gJ3BhdjMwL2Jhc2ljLWZ1bGwtc3RhY2stYXBwOicgKyB0YWcKIHN2Y1sncmVzdGFydCddID0gJ3VubGVzcy1zdG9wcGVkJwogaWYgJ3BvcnRzJyBub3QgaW4gc3ZjOiBzdmNbJ3BvcnRzJ10gPSBbJzgwOjMwMDAnXQogZGF0YVsnc2VydmljZXMnXVsnZnJvbnRlbmQnXSA9IHN2Ywogd2l0aCBvcGVuKHBhdGgsICd3JykgYXMgZjogeWFtbC5kdW1wKGRhdGEsIGYsIGRlZmF1bHRfZmxvd19zdHlsZT1GYWxzZSkKIHByaW50KCdmcm9udGVuZCAtPiBwYXYzMC9iYXNpYy1mdWxsLXN0YWNrLWFwcDonICsgdGFnKQpmaW5hbGx5OgogZmNudGwuZmxvY2sobGYsIGZjbnRsLkxPQ0tfVU4pCiBsZi5jbG9zZSgp\" | base64 -d > /tmp/devpilot_frontend.py"
                                 PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "grep 'image: pav30/basic-full-stack-app:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print $2}' | head -1 || echo ''")
                                 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@3.94.193.111 "python3 /tmp/devpilot_frontend.py ${BUILD_NUMBER}"
                                 COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@3.94.193.111 "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
@@ -172,7 +171,7 @@ pipeline {
                             '''
                             if (rc == 0) {
                                 def resp = new groovy.json.JsonSlurper().parseText(readFile('.ai-response.json'))
-                                echo "\n=== ChatGPT Build Analysis ===\n${resp.choices[0].message.content}\n==============================="
+                                echo "\n=== ChatGPT Build Analysis ===\n${resp.choices[0].message.content}\n===============================}"
                                 writeFile file: 'ai-analysis.json', text: readFile('.ai-response.json')
                                 archiveArtifacts artifacts: 'ai-analysis.json', allowEmptyArchive: true
                                 aiDone = true
