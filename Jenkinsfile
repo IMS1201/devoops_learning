@@ -134,7 +134,7 @@ pipeline {
                             def rc = sh returnStatus: true, script: '''
                                 curl -sf -X POST https://api.anthropic.com/v1/messages \
                                   -H 'Content-Type: application/json' \
-                                  -H "x-api-key: $ANTHROPIC_KEY" \
+                                  -H "x-api-key: $ANTHropic_KEY" \
                                   -H 'anthropic-version: 2023-06-01' \
                                   --max-time 30 \
                                   -d @.ai-payload.json \
