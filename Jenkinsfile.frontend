@@ -86,8 +86,8 @@ pipeline {
                             sh '''
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 echo $REG_PASS | docker login -u $REG_USER --password-stdin
-                                docker tag $DOCKER_IMAGE:$DOCKER_TAG pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG
-                                docker push pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG
+                                docker tag $DOCKER_IMAGE:$DOCKER_TAG pav30/basic-full-stack-app-frontend:$DOCKER_TAG-$BRANCH_TAG
+                                docker push pav30/basic-full-stack-app-frontend:$DOCKER_TAG-$BRANCH_TAG
                             '''
                         }
                     }
@@ -96,15 +96,27 @@ pipeline {
         }
 
         stage('Deploy to VM') {
+            when { expression { return fileExists('frontend/Dockerfile') } }
             steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'devpilot-registry-1780113915287', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
-                        sh '''
-                          pip3 install pyyaml
-                          python3 /tmp/devpilot_ > /dev/null 2>&1
-                          echo "Deploying application"
-                          ssh -o StrictHostKeyChecking=no user@host "cd /composeDir && $COMPOSE_CMD pull SERVICE && $COMPOSE_CMD up -d --no-deps SERVICE"
-                        '''
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    script {
+                        withCredentials([sshUserPrivateKey(credentialsId: 'devpilot-deploy-pavan-3000-Basic-Full-Stack-App-master', keyFileVariable: 'SSH_KEY'), usernamePassword(credentialsId: 'devpilot-registry-1780113915287', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+                            sh '''
+                                BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+                                REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "pip3 install pyyaml -q 2>/dev/null || true; echo \"aW1wb3J0IHlhbWwsIHN5cywgb3MsIGZjbnRsCnBhdGggPSBvcy5wYXRoLmV4cGFuZHVzZXIoJ34vZGV2cGlsb3QtYXBwL2RvY2tlci1jb21wb3NlLnltbCcpCnRhZyA9IHN5cy5hcmd2WzFdCm9zLm1ha2VkaXJzKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAnKSwgZXhpc3Rfb2s9VHJ1ZSkKbGYgPSBvcGVuKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAvLmRldnBpbG90LmxvY2snKSwgJ3cnKQpmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19FWCkKdHJ5OgogdHJ5OgogIHdpdGggb3BlbihwYXRoKSBhcyBmOiBkYXRhID0geWFtbC5zYWZlX2xvYWQoZikgb3Ige30KIGV4Y2VwdCBFeGNlcHRpb246CiAgZGF0YSA9IHt9CiBpZiBub3QgaXNpbnN0YW5jZShkYXRhLmdldCgnc2VydmljZXMnKSwgZGljdCk6IGRhdGFbJ3NlcnZpY2VzJ10gPSB7fQogZXhpc3RpbmcgPSBkYXRhWydzZXJ2aWNlcyddLmdldCgnZnJvbnRlbmQnKQogcHJpbnQoJ1tkZXZwaWxvdF0gc2VydmljZT1mcm9udGVuZCBleGlzdGluZz0nICsgc3RyKGV4aXN0aW5nIGlzIG5vdCBOb25lKSkKIGlmIGV4aXN0aW5nOgogIHByaW50KCdbZGV2cGlsb3RdIG9sZCBpbWFnZT0nICsgc3RyKGV4aXN0aW5nLmdldCgnaW1hZ2UnKSkgKyAnIG9sZCBwb3J0cz0nICsgc3RyKGV4aXN0aW5nLmdldCgncG9ydHMnKSkpCiAgZXhpc3RpbmdbJ2ltYWdlJ10gPSAncGF2MzAvYmFzaWMtZnVsbC1zdGFjay1hcHAtZnJvbnRlbmQ6JyArIHRhZwogIGV4aXN0aW5nWydjb250YWluZXJfbmFtZSddID0gJ2Zyb250ZW5kJwogIGV4aXN0aW5nWydwb3J0cyddID0gWyc5MDAwOjgwJ10KICBwcmludCgnW2RldnBpbG90XSBuZXcgaW1hZ2U9JyArIGV4aXN0aW5nWydpbWFnZSddICsgJyBuZXcgcG9ydHM9JyArIHN0cihleGlzdGluZy5nZXQoJ3BvcnRzJykpKQogIGRhdGFbJ3NlcnZpY2VzJ11bJ2Zyb250ZW5kJ10gPSBleGlzdGluZwogZWxzZToKICBwcmludCgnW2RldnBpbG90XSBjcmVhdGluZyBuZXcgc2VydmljZSBibG9jaycpCiAgc3ZjID0geydpbWFnZSc6ICdwYXYzMC9iYXNpYy1mdWxsLXN0YWNrLWFwcC1mcm9udGVuZDonICsgdGFnLCAnY29udGFpbmVyX25hbWUnOiAnZnJvbnRlbmQnLCAncmVzdGFydCc6ICd1bmxlc3Mtc3RvcHBlZCd9CiAgc3ZjWydwb3J0cyddID0gWyc5MDAwOjgwJ10KICBwcmludCgnW2RldnBpbG90XSBuZXcgc2VydmljZSBwb3J0cz0nICsgc3RyKHN2Yy5nZXQoJ3BvcnRzJykpKQogIGRhdGFbJ3NlcnZpY2VzJ11bJ2Zyb250ZW5kJ10gPSBzdmMKIHdpdGggb3BlbihwYXRoLCAndycpIGFzIGY6IHlhbWwuZHVtcChkYXRhLCBmLCBkZWZhdWx0X2Zsb3dfc3R5bGU9RmFsc2UpCiBwcmludCgnW2RldnBpbG90XSB3cml0dGVuIHRvICcgKyBwYXRoKQogcHJpbnQoJ2Zyb250ZW5kIC0+IHBhdjMwL2Jhc2ljLWZ1bGwtc3RhY2stYXBwLWZyb250ZW5kOicgKyB0YWcpCmZpbmFsbHk6CiBmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19VTikKIGxmLmNsb3NlKCk=\" | base64 -d > /tmp/devpilot_frontend.py"
+                                PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "grep 'image: pav30/basic-full-stack-app-frontend:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print \$NF}' | head -1 || echo ''")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "python3 /tmp/devpilot_frontend.py ${BUILD_NUMBER}-${BRANCH_TAG}"
+                                COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=60 ubuntu@8888 "cd ~/devpilot-app && $COMPOSE_CMD pull frontend && $COMPOSE_CMD up -d --no-deps frontend" || {
+                                    echo "Deploy failed — rolling back to $PREV_TAG"
+                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@8888 "sed -i 's|image: pav30/basic-full-stack-app-frontend:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && $COMPOSE_CMD up -d --no-deps frontend" || true
+                                    exit 1
+                                }
+                                echo "Deployed frontend to http://8888"
+                            '''
+                        }
                     }
                 }
             }
