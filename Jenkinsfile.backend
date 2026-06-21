@@ -86,24 +86,38 @@ pipeline {
                             sh '''
                                 BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
                                 echo $REG_PASS | docker login -u $REG_USER --password-stdin
-                                docker tag $DOCKER_IMAGE:$DOCKER_TAG pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG
-                                docker push pav30/basic-full-stack-app:$DOCKER_TAG-$BRANCH_TAG
+                                docker tag $DOCKER_IMAGE:$DOCKER_TAG pav30/basic-full-stack-app-backend:$DOCKER_TAG-$BRANCH_TAG
+                                docker push pav30/basic-full-stack-app-backend:$DOCKER_TAG-$BRANCH_TAG
                             '''
                         }
                     }
                 }
             }
         }
-        
+
         stage('Deploy to VM') {
+            when { expression { return fileExists('backend/Dockerfile') } }
             steps {
-                script {
-                    def COMPOSE_CMD = 'docker-compose -f /composeDir/docker-compose.yml'
-                    sh '''
-                        pip3 install pyyaml
-                        python3 /tmp/devpilot_
-                    '''
-                    sh '''ssh -o StrictHostKeyChecking=no user@host "cd /composeDir && $COMPOSE_CMD pull SERVICE && $COMPOSE_CMD up -d --no-deps SERVICE"'''
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    script {
+                        withCredentials([sshUserPrivateKey(credentialsId: 'devpilot-deploy-pavan-3000-Basic-Full-Stack-App-master', keyFileVariable: 'SSH_KEY'), usernamePassword(credentialsId: 'devpilot-registry-1780113915287', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
+                            sh '''
+                                BRANCH_TAG=$(echo ${GIT_BRANCH:-${BRANCH_NAME:-main}} | sed 's|origin/||' | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+                                REG_PASS_B64=$(echo -n "$REG_PASS" | base64 -w0)
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@ttttt "echo $REG_PASS_B64 | base64 -d | docker login -u $REG_USER --password-stdin"
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@ttttt "pip3 install pyyaml -q 2>/dev/null || true; echo \"aW1wb3J0IHlhbWwsIHN5cywgb3MsIGZjbnRsCnBhdGggPSBvcy5wYXRoLmV4cGFuZHVzZXIoJ34vZGV2cGlsb3QtYXBwL2RvY2tlci1jb21wb3NlLnltbCcpCnRhZyA9IHN5cy5hcmd2WzFdCm9zLm1ha2VkaXJzKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAnKSwgZXhpc3Rfb2s9VHJ1ZSkKbGYgPSBvcGVuKG9zLnBhdGguZXhwYW5kdXNlcignfi9kZXZwaWxvdC1hcHAvLmRldnBpbG90LmxvY2snKSwgJ3cnKQpmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19FWCkKdHJ5OgogdHJ5OgogIHdpdGggb3BlbihwYXRoKSBhcyBmOiBkYXRhID0geWFtbC5zYWZlX2xvYWQoZikgb3Ige30KIGV4Y2VwdCBFeGNlcHRpb246CiAgZGF0YSA9IHt9CiBpZiBub3QgaXNpbnN0YW5jZShkYXRhLmdldCgnc2VydmljZXMnKSwgZGljdCk6IGRhdGFbJ3NlcnZpY2VzJ10gPSB7fQogZXhpc3RpbmcgPSBkYXRhWydzZXJ2aWNlcyddLmdldCgnYmFja2VuZCcpCiBwcmludCgnW2RldnBpbG90XSBzZXJ2aWNlPWJhY2tlbmQgZXhpc3Rpbmc9JyArIHN0cihleGlzdGluZyBpcyBub3QgTm9uZSkpCiBpZiBleGlzdGluZzoKICBwcmludCgnW2RldnBpbG90XSBvbGQgaW1hZ2U9JyArIHN0cihleGlzdGluZy5nZXQoJ2ltYWdlJykpICsgJyBvbGQgcG9ydHM9JyArIHN0cihleGlzdGluZy5nZXQoJ3BvcnRzJykpKQogIGV4aXN0aW5nWydpbWFnZSddID0gJ3BhdjMwL2Jhc2ljLWZ1bGwtc3RhY2stYXBwLWJhY2tlbmQ6JyArIHRhZwogIGV4aXN0aW5nWydjb250YWluZXJfbmFtZSddID0gJ2JhY2tlbmQnCiAgZXhpc3RpbmdbJ3BvcnRzJ10gPSBbJzgwMDA6ODAwMCddCiAgcHJpbnQoJ1tkZXZwaWxvdF0gbmV3IGltYWdlPScgKyBleGlzdGluZ1snaW1hZ2UnXSArICcgbmV3IHBvcnRzPScgKyBzdHIoZXhpc3RpbmcuZ2V0KCdwb3J0cycpKSkKICBkYXRhWydzZXJ2aWNlcyddWydiYWNrZW5kJ10gPSBleGlzdGluZwogZWxzZToKICBwcmludCgnW2RldnBpbG90XSBjcmVhdGluZyBuZXcgc2VydmljZSBibG9jaycpCiAgc3ZjID0geydpbWFnZSc6ICdwYXYzMC9iYXNpYy1mdWxsLXN0YWNrLWFwcC1iYWNrZW5kOicgKyB0YWcsICdjb250YWluZXJfbmFtZSc6ICdiYWNrZW5kJywgJ3Jlc3RhcnQnOiAndW5sZXNzLXN0b3BwZWQnfQogIHN2Y1sncG9ydHMnXSA9IFsnODAwMDo4MDAwJ10KICBwcmludCgnW2RldnBpbG90XSBuZXcgc2VydmljZSBwb3J0cz0nICsgc3RyKHN2Yy5nZXQoJ3BvcnRzJykpKQogIGRhdGFbJ3NlcnZpY2VzJ11bJ2JhY2tlbmQnXSA9IHN2Ywogd2l0aCBvcGVuKHBhdGgsICd3JykgYXMgZjogeWFtbC5kdW1wKGRhdGEsIGYsIGRlZmF1bHRfZmxvd19zdHlsZT1GYWxzZSkKIHByaW50KCdbZGV2cGlsb3RdIHdyaXR0ZW4gdG8gJyArIHBhdGgpCiBwcmludCgnYmFja2VuZCAtPiBwYXYzMC9iYXNpYy1mdWxsLXN0YWNrLWFwcC1iYWNrZW5kOicgKyB0YWcpCmZpbmFsbHk6CiBmY250bC5mbG9jayhsZiwgZmNudGwuTE9DS19VTikKIGxmLmNsb3NlKCk=\" | base64 -d > /tmp/devpilot_backend.py"
+                                PREV_TAG=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@ttttt "grep 'image: pav30/basic-full-stack-app-backend:' ~/devpilot-app/docker-compose.yml 2>/dev/null | awk '{print \$NF}' | head -1 || echo ''")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@ttttt "python3 /tmp/devpilot_backend.py ${BUILD_NUMBER}-${BRANCH_TAG}"
+                                COMPOSE_CMD=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@ttttt "docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose'")
+                                ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=60 ubuntu@ttttt "cd ~/devpilot-app && $COMPOSE_CMD pull backend && $COMPOSE_CMD up -d --no-deps backend" || {
+                                    echo "Deploy failed — rolling back to $PREV_TAG"
+                                    [ -n "$PREV_TAG" ] && ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 ubuntu@ttttt "sed -i 's|image: pav30/basic-full-stack-app-backend:.*|image: $PREV_TAG|' ~/devpilot-app/docker-compose.yml && cd ~/devpilot-app && $COMPOSE_CMD up -d --no-deps backend" || true
+                                    exit 1
+                                }
+                                echo "Deployed backend to http://ttttt"
+                            '''
+                        }
+                    }
                 }
             }
         }
