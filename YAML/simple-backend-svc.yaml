@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: frontend-namespace # 1. Crucial: Must be in the same namespace as your deployment
+spec:
+  selector:
+    app: backend1               # 2. Crusimple-backend-svc copycial: This bridges the service to your deployment's pods
+  ports:
+  - name: frontend-port
+    protocol: TCP
+    port: 7890                  # 3. The external port you want to expose
+    targetPort: 8000              # 4. The internal port your container code is running on
+  type: NodePort               # Internal cluster communication (change to NodePort if testing locally via Minikube)

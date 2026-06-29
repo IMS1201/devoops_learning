@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend1
+  namespace: frontend-namespace
+  labels:
+    app: backend1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend1
+  template:
+    metadata:
+      labels:
+        app: backend1
+    spec:
+      containers:
+      - name: simple-frontend
+        image: raghuk8/backendapplication:v1
+        ports:
+        - containerPort: 8000 # <-- MOVED HERE (Under containers)
+      imagePullSecrets:
+      - name: my-registry-key1 # <-- Cleaned up alignment public repo no need the keys

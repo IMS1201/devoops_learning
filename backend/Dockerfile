@@ -3,13 +3,11 @@ FROM node:18-alpine
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm install 
+RUN npm install
 
 COPY app.js ./
-COPY routes/user.js ./routes/
+COPY routes ./routes/
 
-RUN npm run build
+EXPOSE 8000
 
-EXPOSE 80
-
-CMD ["npx", "serve", "-s", "dist", "-l", "80"]
+CMD ["node", "app.js"]
