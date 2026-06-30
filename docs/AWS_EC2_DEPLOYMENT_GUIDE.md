@@ -17,13 +17,15 @@
 2. [Project architecture](#2-project-architecture)
 3. [Level 1 — Local development](#3-level-1--local-development)
 4. [Level 2 — Docker on your laptop](#4-level-2--docker-on-your-laptop)
-5. [Level 3 — Kubernetes with Minikube](#5-level-3--kubernetes-with-minikube)
-6. [Level 4 — AWS EC2 + Docker Compose (recommended first cloud step)](#6-level-4--aws-ec2--docker-compose-recommended-first-cloud-step)
-7. [Level 5 — AWS EC2 + Kubernetes (k3s)](#7-level-5--aws-ec2--kubernetes-k3s)
-8. [Level 6 — CI/CD with Jenkins](#8-level-6--cicd-with-jenkins)
-9. [Level 7 — Advanced AWS (production patterns)](#9-level-7--advanced-aws-production-patterns)
-10. [Verification checklist](#10-verification-checklist)
-11. [Troubleshooting](#11-troubleshooting)
+5. [GitHub — clone and pull your code](#5-github--clone-and-pull-your-code)
+6. [Docker Hub — build, push, and private image access](#6-docker-hub--build-push-and-private-image-access)
+7. [Level 3 — Kubernetes with Minikube](#7-level-3--kubernetes-with-minikube)
+8. [Level 4 — AWS EC2 + Docker Compose (recommended first cloud step)](#8-level-4--aws-ec2--docker-compose-recommended-first-cloud-step)
+9. [Level 5 — AWS EC2 + Kubernetes (k3s)](#9-level-5--aws-ec2--kubernetes-k3s)
+10. [Level 6 — CI/CD with Jenkins](#10-level-6--cicd-with-jenkins)
+11. [Level 7 — Advanced AWS (production patterns)](#11-level-7--advanced-aws-production-patterns)
+12. [Verification checklist](#12-verification-checklist)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -111,6 +113,17 @@ You can build locally with `docker compose build` or pull these in Kubernetes.
 
 ## 3. Level 1 — Local development
 
+### Get the code from GitHub (first time)
+
+```bash
+# HTTPS (easiest — works on laptop and EC2)
+git clone https://github.com/IMS1201/devoops_learning.git
+cd devoops_learning
+ls -la
+```
+
+If the repo is **private**, GitHub will ask for credentials. Use your GitHub username and a **Personal Access Token (PAT)** as the password — not your GitHub account password. See [§5.3](#53-clone-a-private-github-repo).
+
 ### Backend
 
 ```bash
@@ -158,7 +171,349 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:6789/   # frontend →
 
 ---
 
-## 5. Level 3 — Kubernetes with Minikube
+## 5. GitHub — clone and pull your code
+
+All deployment paths start by getting source code from GitHub.
+
+| | |
+|---|---|
+| **Repository URL (HTTPS)** | `https://github.com/IMS1201/devoops_learning.git` |
+| **Default branch** | `main` |
+| **Used on** | Your laptop, EC2, Jenkins, Minikube host |
+
+### 5.1 First-time clone (HTTPS)
+
+**On your laptop:**
+
+```bash
+cd ~/workspace    # or any folder you use for projects
+git clone https://github.com/IMS1201/devoops_learning.git
+cd devoops_learning
+git branch
+git log --oneline -5
+```
+
+**On EC2 (after SSH in, installing git, and cloning — see §8.4 and §5.1):**
+
+```bash
+cd ~
+git clone https://github.com/IMS1201/devoops_learning.git
+cd devoops_learning
+ls -la
+```
+
+You should see `backend/`, `frontend/`, `YAML/`, `docker-compose.yml`, etc.
+
+### 5.2 Pull latest changes (after code is updated on GitHub)
+
+When you or your team push new commits, update your local or server copy:
+
+```bash
+cd devoops_learning
+
+git status                  # see if you have local changes
+git pull origin main        # download latest from GitHub
+```
+
+Then rebuild/redeploy depending on where you run:
+
+```bash
+# Local Docker
+docker compose up -d --build
+
+# Kubernetes
+kubectl apply -f YAML/
+kubectl rollout restart deployment backend1 -n frontend-namespace
+kubectl rollout restart deployment frontend1 -n frontend-namespace
+
+# EC2 with Nginx
+docker compose up -d --build
+sudo systemctl reload nginx
+```
+
+### 5.3 Clone a private GitHub repo
+
+If `IMS1201/devoops_learning` is private:
+
+1. GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+2. **Generate new token** → enable scope **`repo`**
+3. Copy the token
+
+Clone using the token:
+
+```bash
+git clone https://github.com/IMS1201/devoops_learning.git
+# Username: your-github-username
+# Password: paste the PAT (not your GitHub password)
+```
+
+Or embed the token in the URL (avoid on shared machines — token visible in shell history):
+
+```bash
+git clone https://YOUR_GITHUB_USERNAME:YOUR_GITHUB_PAT@github.com/IMS1201/devoops_learning.git
+```
+
+### 5.4 Clone with SSH (optional)
+
+**One-time setup on your machine:**
+
+```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+cat ~/.ssh/id_ed25519.pub
+# Copy output → GitHub → Settings → SSH and GPG keys → New SSH key
+```
+
+**Clone:**
+
+```bash
+git clone git@github.com:IMS1201/devoops_learning.git
+cd devoops_learning
+```
+
+SSH is common on EC2 and Jenkins so you do not store passwords in scripts.
+
+### 5.5 Useful Git commands
+
+```bash
+git status                        # changed files
+git branch -a                     # list branches
+git checkout main                 # switch to main branch
+git pull origin main              # fetch + merge latest main
+git fetch origin                  # download without merging
+git log --oneline -10             # recent commits
+git diff                          # unstaged changes
+```
+
+### 5.6 Typical workflow (dev → GitHub → server)
+
+```text
+1. Edit code on laptop
+2. git add . && git commit -m "message" && git push origin main
+3. On EC2:  cd devoops_learning && git pull origin main
+4. Rebuild: docker compose up -d --build
+5. Test:    curl http://YOUR_EC2_IP/bar
+```
+
+Jenkins automates steps 3–4 when you push — see [§10](#10-level-6--cicd-with-jenkins).
+
+### 5.7 If `git pull` fails on EC2
+
+| Error | Fix |
+|-------|-----|
+| `Authentication failed` | Use PAT for HTTPS or set up SSH keys |
+| `local changes would be overwritten` | `git stash` then `git pull`, or `git reset --hard origin/main` (discards local edits) |
+| `not a git repository` | Run `git clone` first — you are not inside the repo folder |
+| `git: command not found` | `sudo apt-get install -y git` |
+
+---
+
+## 6. Docker Hub — build, push, and private image access
+
+Your project images are published to **Docker Hub** under the `raghuk8` account:
+
+| Image | Repository | Visibility |
+|-------|------------|------------|
+| Backend | `raghuk8/backendapplication` | **Private** (needs token/login) |
+| Frontend | `raghuk8/frontend-application` | Public or private |
+
+Kubernetes manifests in `YAML/` reference these images and use `imagePullSecrets: my-registry-key1` when a repo is private.
+
+### 6.1 Create a Docker Hub access token (one-time)
+
+Use a **token**, not your account password, for `docker login` and CI/CD.
+
+1. Log in at [https://hub.docker.com](https://hub.docker.com)
+2. Click your profile → **Account Settings** → **Security**
+3. Click **New Access Token**
+4. Description: `devoops-k8s-ec2`
+5. Permissions: **Read & Write** (to push images) or **Read-only** (pull only on servers)
+6. Copy the token — it is shown **once**. Store it safely (password manager / Jenkins credentials).
+
+```text
+Example token (do not commit this): dckr_pat_xxxxxxxxxxxxxxxxxxxx
+```
+
+### 6.2 Log in to Docker Hub (local machine)
+
+Replace `YOUR_DOCKERHUB_USERNAME` and paste your token when prompted for password:
+
+```bash
+docker login -u YOUR_DOCKERHUB_USERNAME
+# Password: paste your access token (not your Docker Hub account password)
+```
+
+Non-interactive login (scripts / CI):
+
+```bash
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
+```
+
+Verify:
+
+```bash
+docker info | grep Username
+```
+
+### 6.3 Build, tag, and push images
+
+From the project root:
+
+```bash
+# Backend
+docker build -t raghuk8/backendapplication:v1 ./backend
+docker build -t raghuk8/backendapplication:latest ./backend
+docker push raghuk8/backendapplication:v1
+docker push raghuk8/backendapplication:latest
+
+# Frontend
+docker build -t raghuk8/frontend-application:v1 ./frontend
+docker build -t raghuk8/frontend-application:latest ./frontend
+docker push raghuk8/frontend-application:v1
+docker push raghuk8/frontend-application:latest
+```
+
+Bump the tag when you release a new version (e.g. `v2`, `v3`) and update `YAML/simple-backend.yaml` / `YAML/simple-frontend.yaml` to match.
+
+Quick pull test:
+
+```bash
+docker pull raghuk8/backendapplication:v1
+docker pull raghuk8/frontend-application:v1
+```
+
+### 6.4 Pull private images on EC2
+
+After SSH into your EC2 instance, log in before `docker compose pull` or `docker pull`:
+
+```bash
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
+
+docker pull raghuk8/backendapplication:v1
+docker pull raghuk8/frontend-application:v1
+```
+
+To run from Hub instead of building on EC2, update `docker-compose.yml` to use Hub tags:
+
+```yaml
+services:
+  backend:
+    image: raghuk8/backendapplication:v1
+    # remove or comment out: build: ./backend
+  frontend:
+    image: raghuk8/frontend-application:v1
+    # remove or comment out: build: ./frontend
+```
+
+Then:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Credentials are stored in `~/.docker/config.json` on the EC2 instance after login.
+
+### 6.5 Kubernetes — imagePullSecret for private images
+
+When a pod uses a **private** image, the cluster needs a pull secret. Your deployments already reference `my-registry-key1`.
+
+**Step 1 — Log in on your machine (or any host with kubectl access):**
+
+```bash
+docker login -u YOUR_DOCKERHUB_USERNAME
+# use access token as password
+```
+
+**Step 2 — Create the secret in your namespace:**
+
+```bash
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
+```
+
+Or create from your local Docker config (after `docker login`):
+
+```bash
+kubectl create secret generic my-registry-key1 \
+  --from-file=.dockerconfigjson=$HOME/.docker/config.json \
+  --type=kubernetes.io/dockerconfigjson \
+  -n frontend-namespace
+```
+
+**Step 3 — Verify and deploy:**
+
+```bash
+kubectl get secret my-registry-key1 -n frontend-namespace
+kubectl apply -f YAML/
+kubectl get pods -n frontend-namespace
+```
+
+If a pod stays in `ImagePullBackOff`, check events:
+
+```bash
+kubectl describe pod -n frontend-namespace -l app=backend1
+```
+
+Common fixes:
+
+- Token expired → create a new token and update the secret
+- Wrong username or repo name → verify `raghuk8/backendapplication:v1`
+- Secret in wrong namespace → must be in `frontend-namespace`
+
+**Update an existing secret:**
+
+```bash
+kubectl delete secret my-registry-key1 -n frontend-namespace
+
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=NEW_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
+
+kubectl rollout restart deployment backend1 -n frontend-namespace
+kubectl rollout restart deployment frontend1 -n frontend-namespace
+```
+
+### 6.6 Minikube — use the same secret
+
+```bash
+minikube start
+docker login -u YOUR_DOCKERHUB_USERNAME   # token as password
+
+kubectl apply -f YAML/name-space.yaml
+
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
+
+kubectl apply -f YAML/simple-backend.yaml
+kubectl apply -f YAML/simple-backend-svc.yaml
+kubectl apply -f YAML/simple-frontend.yaml
+kubectl apply -f YAML/simple-frontend-svc.yaml
+kubectl apply -f YAML/ingress.yaml
+```
+
+> **Public vs private:** If only the backend is private, you still need `imagePullSecrets` on both deployments if both YAML files declare it — or remove `imagePullSecrets` from the frontend deployment when that repo is public.
+
+### 6.7 Security reminders
+
+- Never commit tokens or passwords to Git
+- Use Jenkins **Credentials** (`usernamePassword`) for pipeline `docker login`
+- Prefer read-only tokens on production pull-only servers (EC2 / k3s)
+- Rotate tokens if exposed
+
+---
+
+## 7. Level 3 — Kubernetes with Minikube
 
 ### One-time setup
 
@@ -168,6 +523,8 @@ minikube addons enable ingress
 ```
 
 ### Deploy all manifests
+
+If using **private** images on Docker Hub, create the pull secret first — see [§6.5](#65-kubernetes--imagepullsecret-for-private-images).
 
 ```bash
 kubectl apply -f YAML/name-space.yaml
@@ -204,11 +561,11 @@ kubectl logs -n frontend-namespace -l app=backend1
 
 ---
 
-## 6. Level 4 — AWS EC2 + Docker Compose (recommended first cloud step)
+## 8. Level 4 — AWS EC2 + Docker Compose (recommended first cloud step)
 
 This section replaces and corrects the original PDF guide for **your actual project**.
 
-### 6.1 Create the EC2 instance
+### 8.1 Create the EC2 instance
 
 1. Log in to [AWS Console](https://aws.amazon.com) → search **EC2** → **Launch instance**.
 2. **Name:** `devoops-learning-server`
@@ -216,7 +573,7 @@ This section replaces and corrects the original PDF guide for **your actual proj
 4. **Instance type:** `t2.micro` or `t3.micro` (Free Tier). Use `t3.small` or `t3.medium` if builds are slow.
 5. **Key pair:** Create `devoops-key.pem` (RSA). Download and store safely.
 
-### 6.2 Security group (firewall)
+### 8.2 Security group (firewall)
 
 | Rule | Protocol | Port | Source | Purpose |
 |------|----------|------|--------|---------|
@@ -229,7 +586,7 @@ This section replaces and corrects the original PDF guide for **your actual proj
 6. **Storage:** 20–30 GB gp3 (enough for Docker images).
 7. **Launch** → wait until **Status checks: 2/2 passed** → copy **Public IPv4 address**.
 
-### 6.3 Connect via SSH
+### 8.3 Connect via SSH
 
 ```bash
 cd ~/Downloads
@@ -239,7 +596,7 @@ ssh -i "devoops-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP
 
 Type `yes` when prompted.
 
-### 6.4 Install software on EC2
+### 8.4 Install software on EC2
 
 Run on the EC2 instance:
 
@@ -273,16 +630,44 @@ docker --version
 docker compose version
 ```
 
-### 6.5 Clone and start the application
+### 8.5 Clone and start the application
+
+Pull code from GitHub first — see [§5 GitHub](#5-github--clone-and-pull-your-code).
+
+**Option A — Build on EC2 from source:**
 
 ```bash
+cd ~
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
 
-# Build and run (uses docker-compose.yml in repo root)
 docker compose up -d --build
 docker compose ps
 ```
+
+**Option B — Pull pre-built images from Docker Hub (private backend needs login first):**
+
+```bash
+cd ~
+git clone https://github.com/IMS1201/devoops_learning.git
+cd devoops_learning
+
+# Log in with Docker Hub username + access token (see §6.1–6.2)
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
+
+docker compose pull
+docker compose up -d
+```
+
+**Option C — Already cloned? Pull latest code and redeploy:**
+
+```bash
+cd ~/devoops_learning
+git pull origin main
+docker compose up -d --build
+```
+
+See [§6 Docker Hub](#6-docker-hub--build-push-and-private-image-access) for token creation, push, and `imagePullSecrets`.
 
 Expected:
 
@@ -298,7 +683,7 @@ curl http://localhost:7890/
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:6789/
 ```
 
-### 6.6 Install Nginx reverse proxy (port 80)
+### 8.6 Install Nginx reverse proxy (port 80)
 
 This mirrors your Kubernetes Ingress (`/bar` → backend, `/bar1` → frontend).
 
@@ -312,7 +697,7 @@ sudo systemctl enable nginx
 sudo systemctl restart nginx
 ```
 
-### 6.7 Test from your laptop
+### 8.7 Test from your laptop
 
 Replace `YOUR_EC2_PUBLIC_IP`:
 
@@ -329,7 +714,7 @@ In a browser:
 - Backend: `http://YOUR_EC2_PUBLIC_IP/bar`
 - Frontend: `http://YOUR_EC2_PUBLIC_IP/bar1`
 
-### 6.8 HTTPS with Let's Encrypt (optional, requires a domain)
+### 8.8 HTTPS with Let's Encrypt (optional, requires a domain)
 
 Point a DNS **A record** (e.g. `app.yourdomain.com`) to your EC2 public IP, then:
 
@@ -340,7 +725,7 @@ sudo certbot --nginx -d app.yourdomain.com
 
 Certbot updates Nginx for HTTPS and auto-renewal.
 
-### 6.9 Production fix — frontend API URL
+### 8.9 Production fix — frontend API URL
 
 `frontend/src/App.jsx` currently calls `http://localhost:8000/`. In cloud/K8s, update to the ingress path:
 
@@ -366,16 +751,16 @@ docker compose up -d --build
 
 ---
 
-## 7. Level 5 — AWS EC2 + Kubernetes (k3s)
+## 9. Level 5 — AWS EC2 + Kubernetes (k3s)
 
 Run the **same `YAML/` manifests** on EC2 using [k3s](https://k3s.io/) (lightweight Kubernetes).
 
-### 7.1 Instance requirements
+### 9.1 Instance requirements
 
 - **Instance type:** at least `t3.medium` (2 vCPU, 4 GB RAM)
 - Security group: open **80, 443** (and **6443** only if you need remote kubectl)
 
-### 7.2 Install k3s on EC2
+### 9.2 Install k3s on EC2
 
 ```bash
 curl -sfL https://get.k3s.io | sh -
@@ -389,15 +774,16 @@ k3s includes Traefik ingress by default. Either use Traefik or disable it and in
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.1/deploy/static/provider/cloud/deploy.yaml
 ```
 
-### 7.3 Deploy your app
+### 9.3 Deploy your app
 
 ```bash
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
+# or if already cloned: git pull origin main
 kubectl apply -f YAML/
 ```
 
-### 7.4 Access
+### 9.4 Access
 
 ```bash
 # Get node IP (EC2 public IP)
@@ -413,17 +799,40 @@ curl -H "Host: foo.bar1.com" http://YOUR_EC2_PUBLIC_IP/bar
 
 ---
 
-## 8. Level 6 — CI/CD with Jenkins
+## 10. Level 6 — CI/CD with Jenkins
 
 Your repo includes `Jenkinsfile.backend` and `Jenkinsfile.frontend`.
 
 ### Pipeline stages (backend example)
 
-1. **Checkout** — clone from GitHub
+1. **Checkout** — `git clone` / pull from GitHub (`checkout scm` in Jenkins)
 2. **Docker Build** — `docker build ./backend`
 3. **Trivy Scan** — security scan (optional)
-4. **Push to Registry** — Docker Hub (`pav30/basic-full-stack-app-backend:...`)
-5. **Deploy to VM** — SSH to EC2, update `docker-compose.yml`, `docker compose pull && up -d`
+4. **Push to Registry** — Docker Hub (`raghuk8/backendapplication:...`)
+5. **Deploy to VM** — SSH to EC2, `docker login`, then `docker compose pull && up -d`
+
+### Docker login in Jenkins (push stage)
+
+Store Docker Hub credentials in Jenkins as **Username with password** (`credentialsId` in your Jenkinsfile). The pipeline uses:
+
+```bash
+echo $REG_PASS | docker login -u $REG_USER --password-stdin
+docker tag $DOCKER_IMAGE:$DOCKER_TAG raghuk8/backendapplication:$DOCKER_TAG
+docker push raghuk8/backendapplication:$DOCKER_TAG
+```
+
+Use the **access token** as `$REG_PASS`, not your Docker Hub account password.
+
+### Docker login on EC2 (deploy stage)
+
+Before pull on the server:
+
+```bash
+echo $REG_PASS | docker login -u $REG_USER --password-stdin
+cd ~/devpilot-app
+docker compose pull
+docker compose up -d
+```
 
 ### Setup checklist
 
@@ -431,15 +840,16 @@ Your repo includes `Jenkinsfile.backend` and `Jenkinsfile.frontend`.
 |------|--------|
 | Jenkins server | Install Jenkins (Docker or VM) |
 | Docker socket | Mount `/var/run/docker.sock` for builds |
-| Credentials | Docker Hub user/pass, EC2 SSH private key |
+| Credentials | Docker Hub username + **access token**, EC2 SSH private key |
 | EC2 prep | Clone repo to `~/devpilot-app`, initial `docker compose up` |
 | Multibranch job | Point to `Jenkinsfile.backend` / `Jenkinsfile.frontend` |
 
 ### Manual deploy after Jenkins push
 
-On EC2:
+On EC2 (must be logged in if images are private):
 
 ```bash
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
 cd ~/devpilot-app
 docker compose pull
 docker compose up -d
@@ -447,7 +857,7 @@ docker compose up -d
 
 ---
 
-## 9. Level 7 — Advanced AWS (production patterns)
+## 11. Level 7 — Advanced AWS (production patterns)
 
 When you are ready to move beyond a single EC2 VM:
 
@@ -471,7 +881,7 @@ Git push → GitHub Actions / Jenkins → build image → push ECR
 
 ---
 
-## 10. Verification checklist
+## 12. Verification checklist
 
 Use this after any deployment:
 
@@ -502,7 +912,22 @@ kubectl describe ingress ingress-example -n frontend-namespace
 
 ---
 
-## 11. Troubleshooting
+## 13. Troubleshooting
+
+### ImagePullBackOff (Kubernetes private image)
+
+| Cause | Fix |
+|-------|-----|
+| No `imagePullSecrets` | Create `my-registry-key1` — see [§6.5](#65-kubernetes--imagepullsecret-for-private-images) |
+| Wrong or expired token | Create new Docker Hub token and update the secret |
+| Secret in wrong namespace | Secret must exist in `frontend-namespace` |
+
+```bash
+kubectl describe pod -n frontend-namespace -l app=backend1
+kubectl delete secret my-registry-key1 -n frontend-namespace
+# recreate secret with new token, then:
+kubectl rollout restart deployment backend1 -n frontend-namespace
+```
 
 ### nginx 404 Not Found
 
@@ -537,7 +962,7 @@ exit   # reconnect SSH
 
 ### Frontend buttons do nothing in browser
 
-`App.jsx` still points to `localhost:8000`. Change API base to `/bar` (see §6.9).
+The frontend uses `/bar` as API base in production. Rebuild the frontend image after code changes.
 
 ### EC2 IP changed after stop/start
 
@@ -548,6 +973,30 @@ Unless you use an **Elastic IP**, the public IP changes when the instance restar
 ## Quick reference — command cheat sheet
 
 ```bash
+# === GITHUB — clone & pull ===
+git clone https://github.com/IMS1201/devoops_learning.git
+cd devoops_learning
+git pull origin main
+
+# === DOCKER HUB — login & push ===
+docker login -u YOUR_DOCKERHUB_USERNAME
+# password: paste access token
+
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
+
+docker build -t raghuk8/backendapplication:v1 ./backend
+docker build -t raghuk8/frontend-application:v1 ./frontend
+docker push raghuk8/backendapplication:v1
+docker push raghuk8/frontend-application:v1
+
+# === K8s private image secret ===
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
+
 # === LOCAL ===
 docker compose up -d --build
 kubectl apply -f YAML/
@@ -555,10 +1004,12 @@ kubectl apply -f YAML/
 # === EC2 SSH ===
 ssh -i devoops-key.pem ubuntu@<EC2_IP>
 
-# === EC2 DEPLOY ===
+# === EC2 DEPLOY (pull code + images from Hub) ===
+cd ~
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
-docker compose up -d --build
+echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
+docker compose pull && docker compose up -d
 sudo cp deploy/nginx/basic-full-stack-app.conf /etc/nginx/sites-available/basic-full-stack-app
 sudo ln -sf /etc/nginx/sites-available/basic-full-stack-app /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl restart nginx
