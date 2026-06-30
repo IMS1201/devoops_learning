@@ -26,6 +26,7 @@
 11. [Level 7 — Advanced AWS (production patterns)](#11-level-7--advanced-aws-production-patterns)
 12. [Verification checklist](#12-verification-checklist)
 13. [Troubleshooting](#13-troubleshooting)
+14. [Pre-deploy checklist (nothing missing)](#14-pre-deploy-checklist-nothing-missing)
 
 ---
 
@@ -71,11 +72,23 @@ Level 7  EKS / ALB / Route53      → managed production AWS
 Your ingress and Nginx both follow this pattern:
 
 ```
-http://<host>/bar1  →  frontend (static React UI)
-http://<host>/bar   →  backend API  (GET/POST → {"message":"..."})
+http://<host>/bar1  →  frontend (React CRUD UI)
+http://<host>/bar   →  backend API  (health + `/items` CRUD)
 ```
 
-**Important:** The backend only defines routes on `/`, not `/bar`. Ingress and Nginx must **rewrite** the path (strip `/bar` or `/bar1`) before forwarding — same as `nginx.ingress.kubernetes.io/rewrite-target: /` in `YAML/ingress.yaml`.
+**Backend API (CRUD):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/items` | List all items |
+| GET | `/items/:id` | Get one item |
+| POST | `/items` | Create |
+| PUT | `/items/:id` | Update |
+| DELETE | `/items/:id` | Delete |
+
+Through ingress/Nginx use `/bar/items` (rewritten to `/items` on the backend).
+
+**Important:** Backend routes live on `/` and `/items`, not `/bar`. Ingress and Nginx must **rewrite** the path (strip `/bar` or `/bar1`) before forwarding — same as `nginx.ingress.kubernetes.io/rewrite-target: /` in `YAML/ingress.yaml`.
 
 ### Repository layout
 
@@ -83,10 +96,11 @@ http://<host>/bar   →  backend API  (GET/POST → {"message":"..."})
 Basic-Full-Stack-App/
 ├── backend/              Express API (port 8000)
 │   ├── Dockerfile
-│   └── app.js
+│   ├── app.js
+│   └── routes/items.js   CRUD API
 ├── frontend/             React UI (built, served on port 80)
 │   ├── Dockerfile
-│   └── src/App.jsx
+│   └── src/App.jsx       CRUD UI; API_BASE=/bar in production
 ├── YAML/                 Kubernetes manifests
 │   ├── name-space.yaml
 │   ├── simple-backend.yaml
@@ -96,6 +110,7 @@ Basic-Full-Stack-App/
 │   └── ingress.yaml
 ├── docker-compose.yml    EC2 / local multi-container run
 ├── deploy/nginx/         Nginx config for EC2
+├── docs/                 This deployment guide
 ├── Jenkinsfile.backend
 └── Jenkinsfile.frontend
 ```
@@ -131,7 +146,7 @@ cd backend
 npm install
 npm start          # nodemon, listens on :8000
 curl http://localhost:8000/
-# {"message":"get"}
+curl http://localhost:8000/items
 ```
 
 ### Frontend
@@ -142,7 +157,7 @@ npm install
 npm run dev        # Vite dev server (usually :5173)
 ```
 
-> **Note:** `frontend/src/App.jsx` calls `http://localhost:8000/` directly. That works locally but **not** through ingress or Nginx. For cloud/K8s, change API calls to a relative path like `/bar` (documented in Level 4).
+> **Note:** In dev, the frontend calls `http://localhost:8000/items`. In production builds (Docker/K8s), `App.jsx` uses `API_BASE=/bar` so requests go to `/bar/items` through ingress or Nginx.
 
 ---
 
@@ -366,7 +381,8 @@ docker push raghuk8/backendapplication:v1
 docker push raghuk8/backendapplication:latest
 
 # Frontend
-docker build -t raghuk8/frontend-application:v1 ./frontend
+# Frontend for EC2/Nginx/K8s (subpath /bar1)
+docker build --build-arg VITE_BASE=/bar1/ -t raghuk8/frontend-application:v1 ./frontend
 docker build -t raghuk8/frontend-application:latest ./frontend
 docker push raghuk8/frontend-application:v1
 docker push raghuk8/frontend-application:latest
@@ -524,10 +540,22 @@ minikube addons enable ingress
 
 ### Deploy all manifests
 
-If using **private** images on Docker Hub, create the pull secret first — see [§6.5](#65-kubernetes--imagepullsecret-for-private-images).
+If using **private** images on Docker Hub, create the pull secret **before** applying deployments:
 
 ```bash
 kubectl apply -f YAML/name-space.yaml
+
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
+```
+
+Then apply the rest:
+
+```bash
 kubectl apply -f YAML/simple-backend.yaml
 kubectl apply -f YAML/simple-backend-svc.yaml
 kubectl apply -f YAML/simple-frontend.yaml
@@ -549,6 +577,10 @@ curl -H "Host: foo.bar1.com" http://$(minikube ip)/bar
 
 # Option C — Fallback rule in ingress.yaml (no host) allows bare IP:
 curl http://$(minikube ip)/bar
+curl http://$(minikube ip)/bar/items
+
+# Frontend UI + CRUD (browser or curl):
+# http://$(minikube ip)/bar1
 ```
 
 ### Useful commands
@@ -725,29 +757,45 @@ sudo certbot --nginx -d app.yourdomain.com
 
 Certbot updates Nginx for HTTPS and auto-renewal.
 
-### 8.9 Production fix — frontend API URL
+### 8.9 Frontend build for `/bar1` subpath (EC2 + Nginx / K8s ingress)
 
-`frontend/src/App.jsx` currently calls `http://localhost:8000/`. In cloud/K8s, update to the ingress path:
+The frontend is served under **`/bar1`**, not at the domain root. The production Docker image must be built with Vite `base: '/bar1/'` so JS/CSS load correctly.
 
-```javascript
-const API_BASE = "/bar";   // works behind Nginx and K8s ingress
+The `frontend/Dockerfile` defaults to this:
 
-const getHandler = async () => {
-  const data = await axios.get(`${API_BASE}/`);
-  setText(data.data.message);
-};
-
-const postHandler = async () => {
-  const data = await axios.post(`${API_BASE}/`, { user: "Shani" });
-  setText(data.data.message);
-};
+```dockerfile
+ARG VITE_BASE=/bar1/
+ENV VITE_BASE=$VITE_BASE
+RUN npm run build
 ```
 
-Rebuild and redeploy after this change:
+**EC2 / Hub push (ingress path):**
 
 ```bash
-docker compose up -d --build
+docker build -t raghuk8/frontend-application:v1 --build-arg VITE_BASE=/bar1/ ./frontend
+docker push raghuk8/frontend-application:v1
 ```
+
+**Local docker-compose** (direct `http://localhost:6789` without Nginx) uses `VITE_BASE=/` in `docker-compose.yml`.
+
+After any frontend code change, **rebuild and redeploy** the image — pulling old Hub tags will not include your changes.
+
+### 8.10 Rebuild after code changes (important)
+
+If you changed `backend/`, `frontend/`, or `YAML/`:
+
+```bash
+# Option 1 — build on EC2
+git pull origin main
+docker compose up -d --build
+
+# Option 2 — build locally, push to Hub, pull on EC2
+docker build -t raghuk8/backendapplication:v2 ./backend
+docker push raghuk8/backendapplication:v2
+# update image tag in YAML/ or docker-compose, then redeploy
+```
+
+Kubernetes: bump `image:` tag in `YAML/simple-backend.yaml` / `YAML/simple-frontend.yaml`, then `kubectl apply -f YAML/` and rollout restart.
 
 ---
 
@@ -764,7 +812,7 @@ This mirrors your local Minikube setup (nginx ingress + `YAML/`), but on a real 
 | **Instance type** | `t3.medium` minimum (2 vCPU, 4 GB RAM). Use `t3.large` if pods stay `Pending`. |
 | **AMI** | Ubuntu Server 22.04 LTS |
 | **Storage** | 30 GB+ gp3 |
-| **Security group** | SSH **22** (My IP), **80**, **443** (0.0.0.0/0), **6443** (optional — remote `kubectl`) |
+| **Security group** | SSH **22** (My IP), **80**, **443** (0.0.0.0/0), **30080** (ingress NodePort), **6443** (optional — remote `kubectl`) |
 
 ### 9.2 Prepare the EC2 node
 
@@ -999,13 +1047,19 @@ To deploy a new image tag, update `image:` in `YAML/simple-backend.yaml` / `YAML
 
 Your repo includes `Jenkinsfile.backend` and `Jenkinsfile.frontend`.
 
+### Jenkins vs project image names
+
+The repo `Jenkinsfile.*` files may reference **`pav30/basic-full-stack-app-*`** from an earlier DevPilot setup. Your Kubernetes YAML and this guide use **`raghuk8/backendapplication`** and **`raghuk8/frontend-application`**. Align Jenkins push tags with whatever is in `YAML/` and `docker-compose.yml`.
+
 ### Pipeline stages (backend example)
 
 1. **Checkout** — `git clone` / pull from GitHub (`checkout scm` in Jenkins)
 2. **Docker Build** — `docker build ./backend`
 3. **Trivy Scan** — security scan (optional)
 4. **Push to Registry** — Docker Hub (`raghuk8/backendapplication:...`)
-5. **Deploy to VM** — SSH to EC2, `docker login`, then `docker compose pull && up -d`
+5. **Deploy to VM** — SSH to EC2, `docker login`, then `docker compose pull && up -d` (Compose path; for K8s use `kubectl apply` instead)
+
+> Jenkins in this repo deploys **Docker Compose on EC2**, not kubectl. For Kubernetes deploy, add a pipeline stage with `kubectl apply -f YAML/` or use a separate job.
 
 ### Docker login in Jenkins (push stage)
 
@@ -1093,17 +1147,23 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:6789/
 
 # Through Nginx (public paths)
 curl http://localhost/bar
+curl http://localhost/bar/items
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost/bar1
 
 # From laptop
 curl http://YOUR_EC2_PUBLIC_IP/bar
+curl http://YOUR_EC2_PUBLIC_IP/bar/items
 ```
+
+Open in browser: `http://YOUR_EC2_PUBLIC_IP/bar1` (CRUD UI).
 
 Kubernetes (Minikube or EC2 kubeadm):
 
 ```bash
 kubectl get pods,svc,ingress -n frontend-namespace
 kubectl describe ingress ingress-example -n frontend-namespace
+curl -H "Host: foo.bar1.com" http://$(minikube ip)/bar/items    # Minikube
+curl -H "Host: foo.bar1.com" http://YOUR_EC2_IP:30080/bar/items # kubeadm NodePort
 ```
 
 ---
@@ -1156,13 +1216,47 @@ exit   # reconnect SSH
 - Port **80** must allow `0.0.0.0/0` for public HTTP
 - App ports **6789/7890** do not need to be public if Nginx proxies on 80
 
-### Frontend buttons do nothing in browser
+### Frontend blank page at `/bar1` (no CSS/JS)
 
-The frontend uses `/bar` as API base in production. Rebuild the frontend image after code changes.
+| Cause | Fix |
+|-------|-----|
+| Vite built with `base: '/'` but served under `/bar1` | Rebuild: `docker build --build-arg VITE_BASE=/bar1/ -t raghuk8/frontend-application:v1 ./frontend` |
+| Old image on Hub / K8s | Push new tag, update YAML, rollout restart |
+
+### Frontend CRUD buttons fail in browser
+
+| Cause | Fix |
+|-------|-----|
+| API calls wrong URL | Production uses `API_BASE=/bar` → calls `/bar/items` |
+| Old frontend image | Rebuild and redeploy frontend container |
 
 ### EC2 IP changed after stop/start
 
 Unless you use an **Elastic IP**, the public IP changes when the instance restarts. Update DNS or `/etc/hosts`.
+
+---
+
+## 14. Pre-deploy checklist (nothing missing)
+
+| Step | Local | EC2 Compose | K8s (Minikube/kubeadm) |
+|------|-------|-------------|-------------------------|
+| Code from GitHub | `git clone` / `git pull` | same on EC2 | same on node |
+| Docker Hub login | if pushing/pulling private | `docker login` + token | `imagePullSecrets` created |
+| Images built/pushed | optional | `docker compose build` or pull Hub tags | `raghuk8/*:v1` in YAML matches Hub |
+| Frontend `VITE_BASE` | `/` for `npm run dev` | `/bar1/` for Nginx/K8s image | `--build-arg VITE_BASE=/bar1/` |
+| Backend CRUD | `curl localhost:8000/items` | `curl .../bar/items` via Nginx | `curl .../bar/items` via ingress |
+| Routing rewrite | n/a | Nginx `deploy/nginx/` installed | `rewrite-target: /` in ingress |
+| Firewall | n/a | SG: 22, 80, 443 | SG: + **30080** for kubeadm ingress |
+| After code change | restart npm | `docker compose up -d --build` | rebuild image, bump tag, `kubectl apply` |
+
+**Common gaps:**
+
+1. Code pushed to GitHub but **Docker images never rebuilt** on EC2/K8s  
+2. Private backend without **`docker login`** or **`my-registry-key1`**  
+3. Using `http://IP/` instead of **`/bar`** or **`/bar1`**  
+4. Blank UI at `/bar1` — missing **`VITE_BASE=/bar1/`** in frontend build  
+5. Jenkins **`pav30/...`** tags vs **`raghuk8/...`** in YAML  
+6. No **Elastic IP** — public IP changes when instance stops  
 
 ---
 
@@ -1181,7 +1275,8 @@ docker login -u YOUR_DOCKERHUB_USERNAME
 echo "YOUR_ACCESS_TOKEN" | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin
 
 docker build -t raghuk8/backendapplication:v1 ./backend
-docker build -t raghuk8/frontend-application:v1 ./frontend
+# Frontend for EC2/Nginx/K8s (subpath /bar1)
+docker build --build-arg VITE_BASE=/bar1/ -t raghuk8/frontend-application:v1 ./frontend
 docker push raghuk8/backendapplication:v1
 docker push raghuk8/frontend-application:v1
 
@@ -1225,4 +1320,4 @@ curl http://<EC2_IP>/bar1
 
 ---
 
-*Document version: 2.0 — aligned with Basic-Full-Stack-App (`IMS1201/devoops_learning`)*
+*Document version: 3.0 — aligned with Basic-Full-Stack-App (`IMS1201/devoops_learning`), CRUD API, kubeadm K8s*

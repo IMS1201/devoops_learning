@@ -11,7 +11,10 @@ services:
       - "7890:8000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_BASE: /
     image: raghuk8/frontend-application:local
     container_name: frontend
     restart: unless-stopped
