@@ -21,7 +21,7 @@
 6. [Docker Hub — build, push, and private image access](#6-docker-hub--build-push-and-private-image-access)
 7. [Level 3 — Kubernetes with Minikube](#7-level-3--kubernetes-with-minikube)
 8. [Level 4 — AWS EC2 + Docker Compose (recommended first cloud step)](#8-level-4--aws-ec2--docker-compose-recommended-first-cloud-step)
-9. [Level 5 — AWS EC2 + Kubernetes (k3s)](#9-level-5--aws-ec2--kubernetes-k3s)
+9. [Level 5 — AWS EC2 + Kubernetes (kubeadm)](#9-level-5--aws-ec2--kubernetes-kubeadm)
 10. [Level 6 — CI/CD with Jenkins](#10-level-6--cicd-with-jenkins)
 11. [Level 7 — Advanced AWS (production patterns)](#11-level-7--advanced-aws-production-patterns)
 12. [Verification checklist](#12-verification-checklist)
@@ -38,7 +38,7 @@ Level 1  Local dev (npm)           → understand the app
 Level 2  Docker / Compose         → package & run anywhere
 Level 3  Minikube + YAML/         → pods, services, ingress
 Level 4  EC2 + Compose + Nginx    → first real cloud deploy  ★ start here for AWS
-Level 5  EC2 + k3s                → same YAML/ on a cloud VM
+Level 5  EC2 + Kubernetes (kubeadm) → same YAML/ on a cloud VM
 Level 6  Jenkins pipelines        → build, scan, push, deploy
 Level 7  EKS / ALB / Route53      → managed production AWS
 ```
@@ -51,7 +51,7 @@ Level 7  EKS / ALB / Route53      → managed production AWS
 | 2 | Docker, Compose | Images, containers, networking |
 | 3 | kubectl, Minikube | Deployments, Services, Ingress |
 | 4 | EC2, Security Groups, Nginx | Cloud VMs, firewall, reverse proxy |
-| 5 | k3s, Helm (optional) | Lightweight cluster on VM |
+| 5 | kubeadm, kubectl | Self-managed Kubernetes cluster on EC2 |
 | 6 | Jenkins, Docker Hub | CI/CD, credentials, rollback |
 | 7 | EKS, ALB, IAM, Terraform | Enterprise AWS patterns |
 
@@ -508,7 +508,7 @@ kubectl apply -f YAML/ingress.yaml
 
 - Never commit tokens or passwords to Git
 - Use Jenkins **Credentials** (`usernamePassword`) for pipeline `docker login`
-- Prefer read-only tokens on production pull-only servers (EC2 / k3s)
+- Prefer read-only tokens on production pull-only servers (EC2 / Kubernetes)
 - Rotate tokens if exposed
 
 ---
@@ -751,51 +751,247 @@ docker compose up -d --build
 
 ---
 
-## 9. Level 5 — AWS EC2 + Kubernetes (k3s)
+## 9. Level 5 — AWS EC2 + Kubernetes (kubeadm)
 
-Run the **same `YAML/` manifests** on EC2 using [k3s](https://k3s.io/) (lightweight Kubernetes).
+Run the **same `YAML/` manifests** on EC2 using a standard **Kubernetes** cluster installed with **kubeadm** — the same tooling used in production and CKA/CKAD learning paths (not k3s).
+
+This mirrors your local Minikube setup (nginx ingress + `YAML/`), but on a real EC2 VM.
 
 ### 9.1 Instance requirements
 
-- **Instance type:** at least `t3.medium` (2 vCPU, 4 GB RAM)
-- Security group: open **80, 443** (and **6443** only if you need remote kubectl)
+| Setting | Recommendation |
+|---------|----------------|
+| **Instance type** | `t3.medium` minimum (2 vCPU, 4 GB RAM). Use `t3.large` if pods stay `Pending`. |
+| **AMI** | Ubuntu Server 22.04 LTS |
+| **Storage** | 30 GB+ gp3 |
+| **Security group** | SSH **22** (My IP), **80**, **443** (0.0.0.0/0), **6443** (optional — remote `kubectl`) |
 
-### 9.2 Install k3s on EC2
+### 9.2 Prepare the EC2 node
+
+SSH into the instance, then run:
 
 ```bash
-curl -sfL https://get.k3s.io | sh -
-sudo kubectl get nodes
+# System prep (Kubernetes requires swap off)
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y git curl apt-transport-https ca-certificates gnupg
+
+sudo swapoff -a
+sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+# Kernel modules & sysctl
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sudo sysctl --system
 ```
 
-k3s includes Traefik ingress by default. Either use Traefik or disable it and install nginx ingress:
+### 9.3 Install containerd
 
 ```bash
-# Optional: use nginx ingress (closer to Minikube setup)
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.1/deploy/static/provider/cloud/deploy.yaml
+sudo apt-get install -y containerd
+sudo mkdir -p /etc/containerd
+containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
+sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+sudo systemctl restart containerd
+sudo systemctl enable containerd
 ```
 
-### 9.3 Deploy your app
+### 9.4 Install kubeadm, kubelet, kubectl
 
 ```bash
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+```
+
+Verify:
+
+```bash
+kubeadm version
+kubectl version --client
+```
+
+### 9.5 Initialize the Kubernetes cluster
+
+Replace `YOUR_EC2_PRIVATE_IP` with the instance **private IP** from the AWS console (e.g. `172.31.x.x`):
+
+```bash
+sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --apiserver-advertise-address=YOUR_EC2_PRIVATE_IP
+```
+
+Save the `kubeadm join ...` output if you add worker nodes later.
+
+Configure kubectl for the `ubuntu` user:
+
+```bash
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+kubectl get nodes
+# STATUS: NotReady until CNI is installed
+```
+
+### 9.6 Install CNI (Calico) and allow pods on control plane
+
+For a **single-node** learning cluster, remove the control-plane taint so app pods can schedule:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+
+kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+```
+
+Wait until the node is Ready:
+
+```bash
+kubectl get nodes -w
+# STATUS should become Ready
+```
+
+### 9.7 Install nginx Ingress Controller
+
+Same ingress controller family as Minikube:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.1/deploy/static/provider/baremetal/deploy.yaml
+
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=120s
+
+kubectl get pods -n ingress-nginx
+```
+
+For EC2, patch the ingress Service to expose HTTP on the node (bare-metal manifest uses NodePort by default):
+
+```bash
+kubectl patch svc ingress-nginx-controller -n ingress-nginx -p \
+  '{"spec":{"ports":[{"name":"http","port":80,"protocol":"TCP","targetPort":"http","nodePort":30080}]}}'
+
+# Or use hostPort / LoadBalancer on cloud — for learning, access via:
+# http://YOUR_EC2_PUBLIC_IP:30080/bar
+```
+
+> **Tip:** Minikube exposes ingress on port 80 via `minikube ip`. On kubeadm EC2, ingress is often on **NodePort 30080** unless you configure a cloud LoadBalancer or host Nginx in front.
+
+### 9.8 Clone code and deploy your app
+
+```bash
+cd ~
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
 # or if already cloned: git pull origin main
-kubectl apply -f YAML/
 ```
 
-### 9.4 Access
+Create Docker Hub pull secret if backend image is private — see [§6.5](#65-kubernetes--imagepullsecret-for-private-images):
 
 ```bash
-# Get node IP (EC2 public IP)
-kubectl get ingress -n frontend-namespace
+kubectl apply -f YAML/name-space.yaml
 
-# With host rule foo.bar1.com — add to /etc/hosts on your laptop:
-# <EC2_PUBLIC_IP>  foo.bar1.com
+kubectl create secret docker-registry my-registry-key1 \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_ACCESS_TOKEN \
+  --docker-email=YOUR_EMAIL@example.com \
+  -n frontend-namespace
 
+kubectl apply -f YAML/simple-backend.yaml
+kubectl apply -f YAML/simple-backend-svc.yaml
+kubectl apply -f YAML/simple-frontend.yaml
+kubectl apply -f YAML/simple-frontend-svc.yaml
+kubectl apply -f YAML/ingress.yaml
+```
+
+Verify:
+
+```bash
+kubectl get pods,svc,ingress -n frontend-namespace
+kubectl describe ingress ingress-example -n frontend-namespace
+```
+
+### 9.9 Access the application
+
+**Option A — Ingress NodePort (default after §9.7):**
+
+```bash
+curl -H "Host: foo.bar1.com" http://YOUR_EC2_PUBLIC_IP:30080/bar
+curl -H "Host: foo.bar1.com" http://YOUR_EC2_PUBLIC_IP:30080/bar1
+```
+
+Add to `/etc/hosts` on your laptop for browser access:
+
+```text
+YOUR_EC2_PUBLIC_IP  foo.bar1.com
+```
+
+Then open `http://foo.bar1.com:30080/bar1` (include NodePort if not using port 80).
+
+**Option B — Match Minikube (port 80 on node IP):**
+
+Patch ingress controller to bind host port 80 (single-node lab only):
+
+```bash
+kubectl patch deployment ingress-nginx-controller -n ingress-nginx --type='json' -p='[
+  {"op":"add","path":"/spec/template/spec/containers/0/ports/0/hostPort","value":80}
+]'
+```
+
+Ensure security group allows **80**. Then:
+
+```bash
 curl -H "Host: foo.bar1.com" http://YOUR_EC2_PUBLIC_IP/bar
 ```
 
-> On a single-node k3s EC2 instance, ensure the ingress controller Service exposes port 80 (NodePort or hostNetwork). For learning, Nginx on the host (Level 4) is simpler; k3s is the bridge to EKS.
+### 9.10 Useful Kubernetes commands on EC2
+
+```bash
+kubectl get all -n frontend-namespace
+kubectl logs -n frontend-namespace -l app=backend1
+kubectl logs -n frontend-namespace -l app=frontend1
+kubectl describe pod -n frontend-namespace <pod-name>
+kubectl rollout restart deployment backend1 -n frontend-namespace
+kubectl delete -f YAML/ingress.yaml
+kubectl apply -f YAML/ingress.yaml
+```
+
+### 9.11 Update deployment after Git push
+
+```bash
+cd ~/devoops_learning
+git pull origin main
+kubectl apply -f YAML/
+kubectl rollout restart deployment backend1 -n frontend-namespace
+kubectl rollout restart deployment frontend1 -n frontend-namespace
+```
+
+To deploy a new image tag, update `image:` in `YAML/simple-backend.yaml` / `YAML/simple-frontend.yaml`, then `kubectl apply -f YAML/`.
+
+### 9.12 Minikube vs EC2 Kubernetes
+
+| | Minikube (Level 3) | EC2 kubeadm (Level 5) |
+|--|-------------------|------------------------|
+| Install | `minikube start` | kubeadm + Calico + nginx ingress |
+| Ingress access | `http://$(minikube ip)/bar` | `http://EC2_IP:30080/bar` or patch port 80 |
+| Manifests | Same `YAML/` folder | Same `YAML/` folder |
+| Production path | Local learning | Leads to multi-node kubeadm or **EKS** (Level 7) |
+
+> For the simplest first cloud deploy, use **Level 4** (Docker Compose + Nginx). Use **Level 5** when you want real Kubernetes on EC2 with the same manifests you already use in Minikube.
 
 ---
 
@@ -903,7 +1099,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/bar1
 curl http://YOUR_EC2_PUBLIC_IP/bar
 ```
 
-Kubernetes (Minikube or k3s):
+Kubernetes (Minikube or EC2 kubeadm):
 
 ```bash
 kubectl get pods,svc,ingress -n frontend-namespace
@@ -997,14 +1193,22 @@ kubectl create secret docker-registry my-registry-key1 \
   --docker-email=YOUR_EMAIL@example.com \
   -n frontend-namespace
 
-# === LOCAL ===
-docker compose up -d --build
+# === LOCAL K8s (Minikube) ===
+minikube start && minikube addons enable ingress
 kubectl apply -f YAML/
+
+# === EC2 K8s (kubeadm) — after cluster init + Calico + ingress ===
+kubectl apply -f YAML/name-space.yaml
+kubectl apply -f YAML/
+curl -H "Host: foo.bar1.com" http://<EC2_IP>:30080/bar
+
+# === LOCAL Docker ===
+docker compose up -d --build
 
 # === EC2 SSH ===
 ssh -i devoops-key.pem ubuntu@<EC2_IP>
 
-# === EC2 DEPLOY (pull code + images from Hub) ===
+# === EC2 DEPLOY — Docker Compose + Nginx ===
 cd ~
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
