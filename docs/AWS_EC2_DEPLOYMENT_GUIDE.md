@@ -297,6 +297,7 @@ git pull origin main              # fetch + merge latest main
 git fetch origin                  # download without merging
 git log --oneline -10             # recent commits
 git diff                          # unstaged changes
+git remote set-url origin https://github.com/IMS1201/devoops_learning
 ```
 
 ### 5.6 Typical workflow (dev → GitHub → server)
