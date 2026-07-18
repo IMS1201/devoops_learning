@@ -7,7 +7,7 @@
 | **Repository** | https://github.com/IMS1201/devoops_learning |
 | **Stack** | React (Vite) frontend + Express backend |
 | **Local K8s** | Minikube + `YAML/` manifests |
-| **Cloud target** | AWS EC2 (Ubuntu 22.04) |
+| **Cloud target** | AWS EC2 (Ubuntu 22.04 **or** Amazon Linux 2023 / RHEL family) |
 
 ---
 
@@ -319,7 +319,7 @@ Jenkins automates steps 3–4 when you push — see [§10](#10-level-6--cicd-wit
 | `Authentication failed` | Use PAT for HTTPS or set up SSH keys |
 | `local changes would be overwritten` | `git stash` then `git pull`, or `git reset --hard origin/main` (discards local edits) |
 | `not a git repository` | Run `git clone` first — you are not inside the repo folder |
-| `git: command not found` | `sudo apt-get install -y git` |
+| `git: command not found` | Ubuntu: `sudo apt-get install -y git` · Amazon Linux / RHEL: `dnf install -y git` (omit `sudo` if root) |
 
 ---
 
@@ -602,7 +602,7 @@ This section replaces and corrects the original PDF guide for **your actual proj
 
 1. Log in to [AWS Console](https://aws.amazon.com) → search **EC2** → **Launch instance**.
 2. **Name:** `devoops-learning-server`
-3. **AMI:** Ubuntu Server 22.04 LTS (HVM), SSD
+3. **AMI:** Ubuntu Server 22.04 LTS (HVM), SSD — **or** Amazon Linux 2023 if you prefer `dnf` / RHEL-family tooling
 4. **Instance type:** `t2.micro` or `t3.micro` (Free Tier). Use `t3.small` or `t3.medium` if builds are slow.
 5. **Key pair:** Create `devoops-key.pem` (RSA). Download and store safely.
 
@@ -621,17 +621,35 @@ This section replaces and corrects the original PDF guide for **your actual proj
 
 ### 8.3 Connect via SSH
 
+**SSH username depends on the AMI:**
+
+| AMI | SSH user |
+|-----|----------|
+| Ubuntu | `ubuntu` |
+| Amazon Linux / Rocky / RHEL | `ec2-user` (or `root` if you are already root) |
+
 ```bash
 cd ~/Downloads
 chmod 400 devoops-key.pem
-ssh -i "devoops-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP
+ssh -i "devoops-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP      # Ubuntu
+# ssh -i "devoops-key.pem" ec2-user@YOUR_EC2_PUBLIC_IP  # Amazon Linux / RHEL family
 ```
 
 Type `yes` when prompted.
 
+> **Package manager tip:** Ubuntu / Debian use `apt-get`. Amazon Linux, Rocky Linux, and RHEL use **`dnf`** (or `yum` on older versions). If you see `apt-get: command not found`, you are on a Red Hat–family AMI — use the **Amazon Linux / RHEL** commands below. If your prompt is `[root@... #]`, you are already root and can omit `sudo`.
+
+Confirm the OS once after SSH:
+
+```bash
+cat /etc/os-release
+# ID=ubuntu  → use apt-get sections
+# ID=amzn / rhel / rocky  → use dnf sections
+```
+
 ### 8.4 Install software on EC2
 
-Run on the EC2 instance:
+#### Option A — Ubuntu (apt-get)
 
 ```bash
 # System updates
@@ -660,6 +678,56 @@ Reconnect SSH (required after `usermod`):
 ```bash
 ssh -i "devoops-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP
 docker --version
+docker compose version
+```
+
+#### Option B — Amazon Linux 2023 / Rocky / RHEL (dnf)
+
+Omit `sudo` if you are already logged in as **root**.
+
+> **Known issue:** On Amazon Linux 2023, `dnf install docker` often leaves a **broken** `docker-buildx` binary under `/usr/libexec/docker/cli-plugins/`. Builds (`docker compose up --build`, `docker buildx`) fail until you replace it with an official release. Do **not** rely only on `dnf install docker-compose-plugin` — install buildx (and compose if needed) manually as below.
+
+```bash
+# System updates
+dnf update -y
+
+# Git
+dnf install -y git
+git --version
+
+# Docker Engine
+dnf install -y docker
+systemctl enable --now docker
+
+# Fix broken docker-buildx shipped with Amazon Linux Docker (x86_64 / amd64)
+mkdir -p /usr/libexec/docker/cli-plugins
+rm -f /usr/libexec/docker/cli-plugins/docker-buildx
+curl -SL "https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64" \
+  -o /usr/libexec/docker/cli-plugins/docker-buildx
+chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+
+# Docker Compose plugin (v2: `docker compose`) — install manually if dnf package is missing/broken
+# Try package first; if `docker compose version` fails, use the curl install below.
+dnf install -y docker-compose-plugin || true
+if ! docker compose version >/dev/null 2>&1; then
+  curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64" \
+    -o /usr/libexec/docker/cli-plugins/docker-compose
+  chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+fi
+
+# Allow ec2-user to run docker without sudo (skip if you always use root)
+usermod -aG docker ec2-user
+exit
+```
+
+For **aarch64 / Graviton** instances, swap the buildx URL to `buildx-v0.17.1.linux-arm64` and the compose URL to `docker-compose-linux-aarch64`.
+
+Reconnect as `ec2-user` if you used `usermod`:
+
+```bash
+ssh -i "devoops-key.pem" ec2-user@YOUR_EC2_PUBLIC_IP
+docker --version
+docker buildx version
 docker compose version
 ```
 
@@ -720,6 +788,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:6789/
 
 This mirrors your Kubernetes Ingress (`/bar` → backend, `/bar1` → frontend).
 
+#### Ubuntu
+
 ```bash
 sudo apt-get install -y nginx
 sudo cp deploy/nginx/basic-full-stack-app.conf /etc/nginx/sites-available/basic-full-stack-app
@@ -728,6 +798,19 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl enable nginx
 sudo systemctl restart nginx
+```
+
+#### Amazon Linux / Rocky / RHEL
+
+Amazon Linux uses `/etc/nginx/conf.d/` (not `sites-available` / `sites-enabled`):
+
+```bash
+dnf install -y nginx
+cp deploy/nginx/basic-full-stack-app.conf /etc/nginx/conf.d/basic-full-stack-app.conf
+# Remove or comment out the default server block if it conflicts on port 80
+nginx -t
+systemctl enable nginx
+systemctl restart nginx
 ```
 
 ### 8.7 Test from your laptop
@@ -751,9 +834,19 @@ In a browser:
 
 Point a DNS **A record** (e.g. `app.yourdomain.com`) to your EC2 public IP, then:
 
+**Ubuntu:**
+
 ```bash
 sudo apt-get install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d app.yourdomain.com
+```
+
+**Amazon Linux / Rocky / RHEL:**
+
+```bash
+dnf install -y certbot python3-certbot-nginx
+certbot --nginx -d app.yourdomain.com
+nslookup vemuris.info
 ```
 
 Certbot updates Nginx for HTTPS and auto-renewal.
@@ -811,13 +904,28 @@ This mirrors your local Minikube setup (nginx ingress + `YAML/`), but on a real 
 | Setting | Recommendation |
 |---------|----------------|
 | **Instance type** | `t3.medium` minimum (2 vCPU, 4 GB RAM). Use `t3.large` if pods stay `Pending`. |
-| **AMI** | Ubuntu Server 22.04 LTS |
+| **AMI** | Ubuntu Server 22.04 LTS **or** Amazon Linux 2023 (Rocky / RHEL also work) |
 | **Storage** | 30 GB+ gp3 |
 | **Security group** | SSH **22** (My IP), **80**, **443** (0.0.0.0/0), **30080** (ingress NodePort), **6443** (optional — remote `kubectl`) |
 
+| AMI | Package manager | Typical SSH user |
+|-----|-----------------|------------------|
+| Ubuntu 22.04 | `apt-get` | `ubuntu` |
+| Amazon Linux 2023 / Rocky / RHEL | `dnf` (or `yum` on older versions) | `ec2-user` or `root` |
+
+> If you see `sudo: apt-get: command not found`, the instance is **not** Ubuntu — use the **Amazon Linux / RHEL** steps (`dnf`). If your prompt is `[root@... #]`, drop `sudo` from every command.
+
+Confirm OS before installing anything:
+
+```bash
+cat /etc/os-release
+```
+
 ### 9.2 Prepare the EC2 node
 
-SSH into the instance, then run:
+SSH into the instance, then run the block that matches your AMI.
+
+#### Ubuntu (apt-get)
 
 ```bash
 # System prep (Kubernetes requires swap off)
@@ -843,7 +951,37 @@ EOF
 sudo sysctl --system
 ```
 
+#### Amazon Linux / Rocky / RHEL (dnf)
+
+Omit `sudo` when logged in as **root**.
+
+```bash
+# System prep (Kubernetes requires swap off)
+dnf update -y
+dnf install -y git curl ca-certificates gnupg2 yum-utils
+
+swapoff -a
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+# Kernel modules & sysctl
+cat <<EOF | tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+modprobe overlay
+modprobe br_netfilter
+
+cat <<EOF | tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sysctl --system
+```
+
 ### 9.3 Install containerd
+
+#### Ubuntu
 
 ```bash
 sudo apt-get install -y containerd
@@ -854,7 +992,20 @@ sudo systemctl restart containerd
 sudo systemctl enable containerd
 ```
 
+#### Amazon Linux / Rocky / RHEL
+
+```bash
+dnf install -y containerd
+mkdir -p /etc/containerd
+containerd config default | tee /etc/containerd/config.toml > /dev/null
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+systemctl restart containerd
+systemctl enable containerd
+```
+
 ### 9.4 Install kubeadm, kubelet, kubectl
+
+#### Ubuntu (deb packages)
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
@@ -867,7 +1018,24 @@ sudo apt-get install -y kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl
 ```
 
-Verify:
+#### Amazon Linux / Rocky / RHEL (rpm packages)
+
+```bash
+cat <<EOF | tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+
+dnf install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+systemctl enable --now kubelet
+```
+
+Verify (both OS families):
 
 ```bash
 kubeadm version
@@ -879,17 +1047,19 @@ kubectl version --client
 Replace `YOUR_EC2_PRIVATE_IP` with the instance **private IP** from the AWS console (e.g. `172.31.x.x`):
 
 ```bash
-sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --apiserver-advertise-address=YOUR_EC2_PRIVATE_IP
+# Add sudo on Ubuntu if you are not root
+kubeadm init --pod-network-cidr=192.168.0.0/16 --apiserver-advertise-address=YOUR_EC2_PRIVATE_IP
 ```
 
 Save the `kubeadm join ...` output if you add worker nodes later.
 
-Configure kubectl for the `ubuntu` user:
+Configure kubectl for your login user (`ubuntu`, `ec2-user`, or `root`):
 
 ```bash
 mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+# If you used sudo for kubeadm init, copy with: sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
 
 kubectl get nodes
 # STATUS: NotReady until CNI is installed
@@ -1198,20 +1368,66 @@ kubectl rollout restart deployment backend1 -n frontend-namespace
 
 Nginx/Ingress is forwarding `/bar` without rewriting. Use `deploy/nginx/basic-full-stack-app.conf` or the ingress rewrite annotation.
 
+### `sudo: apt-get: command not found`
+
+Your EC2 AMI is from the **Red Hat family** (Amazon Linux, Rocky Linux, or RHEL), not Ubuntu. Those systems use **`dnf`** (or `yum` on older releases), not `apt-get`.
+
+```bash
+cat /etc/os-release          # confirm ID=amzn / rhel / rocky
+dnf update -y                # instead of apt-get update
+# Omit sudo if your prompt is [root@... #]
+```
+
+Use the **Amazon Linux / RHEL** command blocks in [§8.4](#84-install-software-on-ec2) and [§9.2](#92-prepare-the-ec2-node)–[§9.4](#94-install-kubeadm-kubelet-kubectl).
+
 ### `docker compose` not found
+
+**Ubuntu:**
 
 ```bash
 sudo apt-get install -y docker-compose-plugin
 docker compose version
 ```
 
+**Amazon Linux / Rocky / RHEL:**
+
+```bash
+dnf install -y docker-compose-plugin
+# If that still fails:
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -SL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+docker compose version
+```
+
+### Amazon Linux: `docker buildx` / build fails after `dnf install docker`
+
+Amazon Linux often ships a broken buildx plugin. Replace it with a known-good release:
+
+```bash
+rm -f /usr/libexec/docker/cli-plugins/docker-buildx
+curl -SL "https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64" \
+  -o /usr/libexec/docker/cli-plugins/docker-buildx
+chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+docker buildx version
+```
+
 ### Permission denied on Docker
+
+**Ubuntu:**
 
 ```bash
 sudo usermod -aG docker ubuntu
 exit   # reconnect SSH
 ```
 
+**Amazon Linux / Rocky / RHEL:**
+
+```bash
+usermod -aG docker ec2-user
+exit   # reconnect SSH
+```
 ### Security group blocks traffic
 
 - Port **80** must allow `0.0.0.0/0` for public HTTP
@@ -1302,9 +1518,10 @@ curl -H "Host: foo.bar1.com" http://<EC2_IP>:30080/bar
 docker compose up -d --build
 
 # === EC2 SSH ===
-ssh -i devoops-key.pem ubuntu@<EC2_IP>
+ssh -i devoops-key.pem ubuntu@<EC2_IP>      # Ubuntu
+# ssh -i devoops-key.pem ec2-user@<EC2_IP>  # Amazon Linux / RHEL
 
-# === EC2 DEPLOY — Docker Compose + Nginx ===
+# === EC2 DEPLOY — Docker Compose + Nginx (Ubuntu) ===
 cd ~
 git clone https://github.com/IMS1201/devoops_learning.git
 cd devoops_learning
@@ -1314,6 +1531,11 @@ sudo cp deploy/nginx/basic-full-stack-app.conf /etc/nginx/sites-available/basic-
 sudo ln -sf /etc/nginx/sites-available/basic-full-stack-app /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl restart nginx
 
+# === EC2 DEPLOY — Docker Compose + Nginx (Amazon Linux / RHEL; omit sudo if root) ===
+# dnf install -y nginx
+# cp deploy/nginx/basic-full-stack-app.conf /etc/nginx/conf.d/basic-full-stack-app.conf
+# nginx -t && systemctl enable --now nginx
+
 # === TEST ===
 curl http://<EC2_IP>/bar
 curl http://<EC2_IP>/bar1
@@ -1321,4 +1543,4 @@ curl http://<EC2_IP>/bar1
 
 ---
 
-*Document version: 3.0 — aligned with Basic-Full-Stack-App (`IMS1201/devoops_learning`), CRUD API, kubeadm K8s*
+*Document version: 3.1 — Ubuntu + Amazon Linux / RHEL (`dnf`) paths for EC2 Compose and kubeadm*
