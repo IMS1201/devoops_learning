@@ -16,7 +16,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_BASE: /
+        VITE_BASE: /bar1/
     image: raghuk8/frontend-application:local
     container_name: frontend
     restart: unless-stopped
